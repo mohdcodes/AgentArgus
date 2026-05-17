@@ -1,93 +1,101 @@
-[build-system] 
-requires = ["hatchling"] 
-build-backend = "hatchling.build" 
- 
-[project] 
-name = "agentargus" 
-version = "0.0.0" 
-description = "Production-grade evaluation, observability, and reliability for AI agents (in 
-development)" 
-readme = "README.md" 
-requires-python = ">=3.10" 
-license = {text = "MIT"} 
-authors = [{name = "Mohd Arbaaz Siddiqui", email = "arbaazcode@gmail.com"}] 
-keywords = ["llm", "agents", "evaluation", "observability", "langgraph"] 
-classifiers = [ 
-    "Development Status :: 1 - Planning", 
-    "Programming Language :: Python :: 3", 
-    "License :: OSI Approved :: MIT License", 
-] 
- 
-[project.urls] 
-Homepage = "https://github.com/mohdcodes/agentargus" 
-Issues = "https://github.com/mohdcodes/agentforge/issues" 
- 
-README.md: one paragraph, link to GitHub. 
-agentforge/__init__.py: 
-__version__ = "0.0.0" 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-
-
-
-
-
-
-
-    [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+# ── Project metadata ──────────────────────────────────────────────────────────
 
 [project]
-name = "methodoverload"
-version = "0.1.2"
-description = "Runtime function and method overloading for Python"
+name = "agentargus"
+version = "0.0.0"
+description = "Production-grade evaluation, observability, and reliability for AI agents"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
-
 authors = [
-  { name = "Mohd Arbaaz Siddiqui", email = "arbaazcode@gmail.com" }
+    { name = "Mohd Arbaaz Siddiqui", email = "arbaazcode@gmail.com" }
 ]
-
-keywords = ["overloading", "dispatch", "typing", "oop"]
-
+keywords = [
+    "llm",
+    "agents",
+    "evaluation",
+    "observability",
+    "reliability",
+    "langgraph",
+    "opentelemetry",
+    "rag",
+]
 classifiers = [
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent"
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+# Runtime dependencies (empty for v0.0.0 stub — fill these in during Week 2+)
 dependencies = []
 
-[project.urls]
-Homepage = "https://github.com/mohdcodes/pyoverload"
-Repository = "https://github.com/mohdcodes/pyoverload"
-Documentation = "https://github.com/mohdcodes/pyoverload/blob/main/docs"
-"Bug Tracker" = "https://github.com/mohdcodes/pyoverload/issues"
-
+# Optional dependency groups
 [project.optional-dependencies]
-dev = ["pytest>=9.0", "pytest-cov>=4.0"]
-docs = ["sphinx>=6.0", "sphinx-rtd-theme>=1.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "build>=1.0",
+    "twine>=5.0",
+]
+docs = [
+    "pdoc>=14.0",
+]
 
-[tool.setuptools]
-packages = ["methodoverload"]
+# ── Project URLs ──────────────────────────────────────────────────────────────
+
+[project.urls]
+Repository = "https://github.com/mohdcodes/AgentArgus"
+Issues     = "https://github.com/mohdcodes/AgentArgus/issues"
+
+# ── Hatchling build config ────────────────────────────────────────────────────
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentargus"]
+
+# ── Ruff (linter + formatter — replaces black, flake8, isort) ────────────────
+
+[tool.ruff]
+line-length    = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agentargus"]
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
 
 [tool.pytest.ini_options]
-minversion = "9.0"
-testpaths = ["tests"]
+minversion   = "8.0"
+testpaths    = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-v --tb=short"
+addopts      = "-v --tb=short --cov=agentargus"
+asyncio_mode = "auto"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
 
+# ── Coverage ──────────────────────────────────────────────────────────────────
+
 [tool.coverage.run]
-source = ["pyoverload"]
-omit = ["*/tests/*", "*/test_*.py"]
+source = ["agentargus"]
+omit   = ["*/tests/*", "*/test_*.py"]
 
 [tool.coverage.report]
 exclude_lines = [
@@ -97,35 +105,13 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
-precision = 2
+precision    = 2
+fail_under   = 80
 
-[tool.black]
-line-length = 100
-target-version = ["py39", "py310", "py311"]
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
-
-[tool.isort]
-profile = "black"
-line_length = 100
-skip_gitignore = true
-known_first_party = ["methodoverload"]
+# ── Mypy ──────────────────────────────────────────────────────────────────────
 
 [tool.mypy]
-python_version = "3.9"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
+python_version        = "3.10"
+warn_return_any       = true
+warn_unused_configs   = true
 ignore_missing_imports = true
