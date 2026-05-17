@@ -1,0 +1,131 @@
+[build-system] 
+requires = ["hatchling"] 
+build-backend = "hatchling.build" 
+ 
+[project] 
+name = "agentargus" 
+version = "0.0.0" 
+description = "Production-grade evaluation, observability, and reliability for AI agents (in 
+development)" 
+readme = "README.md" 
+requires-python = ">=3.10" 
+license = {text = "MIT"} 
+authors = [{name = "Mohd Arbaaz Siddiqui", email = "arbaazcode@gmail.com"}] 
+keywords = ["llm", "agents", "evaluation", "observability", "langgraph"] 
+classifiers = [ 
+    "Development Status :: 1 - Planning", 
+    "Programming Language :: Python :: 3", 
+    "License :: OSI Approved :: MIT License", 
+] 
+ 
+[project.urls] 
+Homepage = "https://github.com/mohdcodes/agentargus" 
+Issues = "https://github.com/mohdcodes/agentforge/issues" 
+ 
+README.md: one paragraph, link to GitHub. 
+agentforge/__init__.py: 
+__version__ = "0.0.0" 
+
+
+
+
+
+
+
+
+    [build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "methodoverload"
+version = "0.1.2"
+description = "Runtime function and method overloading for Python"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+authors = [
+  { name = "Mohd Arbaaz Siddiqui", email = "arbaazcode@gmail.com" }
+]
+
+keywords = ["overloading", "dispatch", "typing", "oop"]
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent"
+]
+
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/mohdcodes/pyoverload"
+Repository = "https://github.com/mohdcodes/pyoverload"
+Documentation = "https://github.com/mohdcodes/pyoverload/blob/main/docs"
+"Bug Tracker" = "https://github.com/mohdcodes/pyoverload/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0", "pytest-cov>=4.0"]
+docs = ["sphinx>=6.0", "sphinx-rtd-theme>=1.0"]
+
+[tool.setuptools]
+packages = ["methodoverload"]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["pyoverload"]
+omit = ["*/tests/*", "*/test_*.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+precision = 2
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip_gitignore = true
+known_first_party = ["methodoverload"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
