@@ -1,1 +1,23 @@
-/venv
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Build
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Credentials — NEVER commit these
+.pypirc
+*.env
+.env*
+
+# IDE
+.vscode/
+.idea/
