@@ -1,0 +1,25 @@
+target-version = "py310"
+line-length = 100
+src = ["agentargus", "tests"]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "W",   # pycodestyle warnings
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # comprehensions
+    "SIM", # simplify
+    "T20", # flake8-print  -> bans print() in library code (§7)
+]
+
+[lint.per-file-ignores]
+# Examples and CLI are allowed to print; tests may too.
+"examples/**" = ["T20"]
+"tests/**" = ["T20"]
+"benchmarks/**" = ["T20"]
+
+[format]
+quote-style = "double"
