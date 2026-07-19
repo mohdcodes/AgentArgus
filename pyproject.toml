@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentargus"
+version = "0.1.0.dev0"
+description = "Framework-agnostic evaluation, observability, and reliability for LLM agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mohd Arbaaz Siddiqui", email = "arbaazcode@gmail.com" }]
+keywords = ["llm", "agents", "evaluation", "observability", "reliability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+    "jinja2>=3.0",
+    "methodoverload>=0.1.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-asyncio>=0.23",
+    "pytest-recording>=0.13",
+    "ruff>=0.4",
+    "mypy>=1.8",
+    "build>=1.0",
+    "twine>=5.0",
+    "anthropic>=0.34",
+]
+langgraph = ["langgraph>=0.2"]
+docs = ["pdoc>=14.0"]
+
+[project.urls]
+Homepage = "https://github.com/mohdcodes/agentargus"
+Repository = "https://github.com/mohdcodes/agentargus"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentargus"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["agentargus"]
+branch = true
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
