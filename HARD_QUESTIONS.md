@@ -6,6 +6,164 @@ gate does not close until the owner can answer its batch in their own words.
 
 ---
 
+## Module 8 — Orchestration Patterns (production-grade)
+
+> Context-block format: Deep Research Agent example + code citation + Claude
+> Code's own answer. Read it, then write yours below.
+
+### 1. Crash mid-step — how do you avoid trusting a half-done step?
+
+**Context:**
+- *Research-agent example:* the process is killed while the `calc` worker is
+  running on step 2 of a retrieval→calc→synth chain. On restart, step 2 must NOT
+  be treated as done.
+- *Code:* `SqliteCheckpointer.save_step` writes `STATUS_RUNNING` before the
+  worker runs and `STATUS_COMPLETED` only after it returns; `last_completed_step`
+  / `completed_output` consider only `completed` rows.
+- *My answer:* the `status` column is the crash-safety signal. A step is
+  `running` from before-worker to after-worker (committed transactions); killed
+  mid-flight it stays `running`, so on resume it's re-run, never replayed as
+  cached. Only `completed` steps are trusted. WAL + per-step commit make the
+  transitions durable.
+
+*Your answer:*
+
+### 2. Why is Handoff a return value, not an exception?
+
+**Context:**
+- *Research-agent example:* retrieval wants synthesis next; it `return
+  Handoff("synthesis", docs)`. Synthesis just `return "answer"`.
+- *Code:* `SupervisorAgent.arun` checks `isinstance(current, Handoff)` — Handoff
+  continues, anything else is final.
+- *My answer:* exceptions are for errors, not normal control flow. Using
+  `raise Handoff` would (a) misuse exceptions and (b) collide with the Module 4
+  reliability layer, which catches exceptions to retry — a handoff would look
+  like a failure to retry. Returning a Handoff keeps control flow explicit and
+  keeps orchestration composable with reliability.
+
+*Your answer:*
+
+### 3. SupervisorAgent is-a BaseAgent — what does that unlock?
+
+**Context:**
+- *Research-agent example:* you want to trace, cost, and eval the WHOLE
+  multi-agent system, not each worker separately.
+- *Code:* `class SupervisorAgent(BaseAgent)`; test wraps it: `Agent(sup)`.
+- *My answer:* because the supervisor is a `BaseAgent`, `Agent(supervisor,
+  tracer=..., cost=...)` wraps the entire orchestration as one unit — spans,
+  cost, RunResult, eval metrics all apply to the system as a whole. And it can
+  itself be a worker of another supervisor (nesting). This is the is-a payoff:
+  the whole earlier stack composes over a multi-agent system for free.
+
+*Your answer:*
+
+### 4. Polymorphism — prove the supervisor doesn't know worker types
+
+**Context:**
+- *Research-agent example:* today workers are plain `Agent`s; tomorrow one is a
+  `SupervisorAgent` or a LangGraph-wrapped agent.
+- *Code:* `SupervisorAgent` stores `dict[str, BaseAgent]` and calls
+  `self._workers[name].arun(input)`.
+- *My answer:* it only ever touches `BaseAgent.arun` — never a concrete type or
+  isinstance branch. Any `BaseAgent` (Agent, another SupervisorAgent, a custom
+  subclass) is a valid worker with zero supervisor changes. This is inheritance-
+  based polymorphism; it's the concrete reason `BaseAgent` was defined as an ABC
+  back in Module 1.
+
+*Your answer:*
+
+### 5. Concurrency — two runs sharing one SQLite file
+
+**Context:**
+- *Research-agent example:* your service handles query A and query B
+  concurrently, both checkpointing to the same `checkpoints.db`.
+- *Code:* every query is `WHERE run_id = ?`; writes are under a `threading.Lock`;
+  WAL enabled; `check_same_thread=False`.
+- *My answer:* run_id scoping means A and B never see each other's steps even in
+  one file. The lock serialises writes (SQLite is single-writer anyway); WAL lets
+  reads proceed concurrently with a write. Under very heavy parallel writes SQLite
+  contention is real — documented; a Postgres/Redis Checkpointer could drop in via
+  the ABC if needed.
+
+*Your answer:*
+
+### 6. Worker failure returns a partial RunResult — why not raise?
+
+**Context:**
+- *Research-agent example:* the `calc` worker throws on a bad number mid-chain.
+- *Code:* `arun`'s `try/except` records an `ErrorRecord`, checkpoints `failed`,
+  optionally DLQs, and returns `_assemble(failed=True)`.
+- *My answer:* production graceful degradation — the caller gets a RunResult that
+  says what ran, what failed, and why (chain-so-far + ErrorRecord), instead of a
+  bare traceback that loses all context. It composes with reliability: wrap the
+  worker in a `ReliabilityPolicy` and transient failures get retried *before*
+  they ever reach this partial-failure path.
+
+*Your answer:*
+
+### 7. The context-size cap — what's it defending against?
+
+**Context:**
+- *Research-agent example:* a buggy chain keeps appending full documents to
+  `Handoff.context` on every hop; after 50 hops it's hundreds of MB.
+- *Code:* `_check_context_size` serialises the context and raises
+  `OrchestrationError` past ~1 MB.
+- *My answer:* `max_steps` bounds the *number* of hops; the context cap bounds
+  the *size* carried across hops — a different runaway (memory, not loop). Without
+  it a long chain that accumulates state could OOM the process. Both are
+  configurable guards that fail loud rather than degrade mysteriously.
+
+*Your answer:*
+
+### 8. LLM router picks a name that isn't a worker — then what?
+
+**Context:**
+- *Research-agent example:* the judge replies "use the retrieval agent" instead
+  of the bare name `retrieval`, or hallucinates `researcher`.
+- *Code:* `LLMRouter.route` first tries an exact match, then looks for a known
+  name *inside* the reply; `SupervisorAgent._route` raises `OrchestrationError`
+  if the final pick still isn't a worker.
+- *My answer:* two layers — the router is tolerant of prose ("use the retrieval
+  agent" → finds `retrieval`), and the supervisor validates the final choice
+  against the worker set, failing loud on a genuine hallucination rather than
+  silently misrouting or picking a default. A silent misroute is the worst
+  outcome (wrong answer, no signal); this makes it impossible.
+
+*Your answer:*
+
+### 9. Resume replays cached outputs — is that always safe?
+
+**Context:**
+- *Research-agent example:* step 0 (retrieval) completed and was checkpointed;
+  the run resumes and replays retrieval's cached output instead of re-searching.
+- *Code:* on resume, `arun` returns `completed_output(run_id, step)` for
+  already-completed steps without calling the worker.
+- *My answer:* safe for *deterministic-enough* resume where re-running a step
+  would waste work/money (a re-search costs an API call). The caveat: if the
+  world changed between the original run and the resume, the cached output is
+  stale — acceptable for the "crash then resume promptly" use case this targets.
+  A future `force_rerun` flag could bypass the cache; documented.
+
+*Your answer:*
+
+### 10. All hardening reused existing seams — coincidence or design?
+
+**Context:**
+- *Research-agent example:* production observability = spans (Module 2) + logs
+  (Module 0); failure handling = DLQ (Module 4) + ErrorRecord (Module 0);
+  chain visibility = record_step (Module 7).
+- *Code:* `patterns.py` imports the tracer seam, `record_step`, `ErrorRecord`,
+  and accepts a `dead_letter` sink — no new infrastructure.
+- *My answer:* by design. Every prior module built a reusable seam, so making
+  orchestration production-grade was *composition*, not new plumbing — spans,
+  logs, DLQ, error records, step recording all already existed. If Module 8 had
+  needed all-new observability/failure machinery, that would have signalled the
+  earlier abstractions weren't general enough. They were.
+
+*Your answer:*
+
+---
+
 ## Module 7 — Agent Metrics
 
 > Context-block format: Deep Research Agent example + code citation + Claude

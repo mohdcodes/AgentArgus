@@ -14,6 +14,7 @@ __all__ = [
     "CostCeilingExceeded",
     "TransientError",
     "CircuitOpenError",
+    "OrchestrationError",
 ]
 
 
@@ -71,4 +72,13 @@ class CircuitOpenError(AgentArgusError):
     The breaker fails fast instead of calling a dependency it believes is down,
     giving it time to recover. This is a *controlled* failure, recorded in
     ``RunResult.errors``, not a crash.
+    """
+
+
+class OrchestrationError(AgentArgusError):
+    """Raised by SupervisorAgent on an unrecoverable orchestration condition.
+
+    Examples: a handoff chain exceeding ``max_steps`` (likely a loop), a router
+    returning an unknown worker, accumulated handoff context exceeding the size
+    cap. A controlled failure with a clear message, not an internal crash.
     """

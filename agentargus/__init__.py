@@ -19,7 +19,11 @@ from agentargus._internal.exceptions import (
 from agentargus.agents import (
     Agent,
     BaseAgent,
+    Handoff,
+    LLMRouter,
     Recorder,
+    SqliteCheckpointer,
+    SupervisorAgent,
     record_step,
     record_tool_call,
 )
@@ -101,6 +105,10 @@ __all__ = [
     "Recorder",
     "record_tool_call",
     "record_step",
+    "SupervisorAgent",
+    "Handoff",
+    "LLMRouter",
+    "SqliteCheckpointer",
     "AgentArgusError",
     "ConfigError",
     "SerializationError",

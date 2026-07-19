@@ -6,6 +6,73 @@ the top.
 
 ---
 
+## Module 8 — Orchestration Patterns (production-grade) — 2026-07-19
+
+### 1. What was built
+- **`agents/patterns.py`** — `SupervisorAgent(BaseAgent)` (routes to workers,
+  follows a handoff chain), `Handoff(target, input, context)`, `Router` protocol
+  + `LLMRouter` default.
+- **`agents/checkpoint_store.py`** — `Checkpointer(ABC)`, `SqliteCheckpointer`
+  (WAL, status flag, run_id-scoped, locked), `InMemoryCheckpointer`.
+- **`_internal/exceptions.py`** — `OrchestrationError`.
+
+### 2. Why this shape — production-grade hardening
+The owner flagged this as an important module to make production-grade. Beyond a
+correct baseline, every hardening item reuses an existing seam (no new deps):
+- **Durability:** SQLite **WAL** + atomic per-step commit + a `status`
+  (running/completed/failed) column — a step killed mid-write stays `running` and
+  is re-run on resume, never trusted.
+- **Concurrency:** writes serialised by a lock (SQLite is single-writer),
+  **every query run_id-scoped** so concurrent runs never cross, WAL for readers,
+  `check_same_thread=False` so `to_thread` workers can use the connection.
+- **Graceful failure:** a worker exception → step checkpointed `failed`, an
+  `ErrorRecord` recorded, optional DLQ (reuse Module 4), and a **partial
+  RunResult** (`failed=True`, chain so far) returned — not a bare crash.
+- **Observability:** per-hop tracer span (reuse Module 2) + structured
+  routing-decision logs (reuse Module 0), correlated by run/trace id. Each hop
+  also `record_step` (Module 7) so `PlanCoherence` can score the chain.
+- **Validation (fail fast):** empty worker set, unknown router pick, unknown
+  handoff target all raise `OrchestrationError` at construction/route time.
+- **Guards:** `max_steps` (loop cap) **and** a ~1 MB context-size cap
+  (runaway-accumulation guard).
+
+### 3. Design decisions
+- **Handoff as return value, not exception.** A worker whose output *is* a
+  `Handoff` continues the chain; anything else is final. Avoids
+  exceptions-as-control-flow (which would collide with the reliability layer that
+  catches exceptions).
+- **Polymorphism headline:** `SupervisorAgent` iterates `dict[str, BaseAgent]`
+  knowing only `BaseAgent.arun` — this is *why* `BaseAgent` exists. And it
+  *is-a* `BaseAgent`, so `Agent(supervisor)` wraps/traces/evals a whole
+  multi-agent system.
+- **Resume:** same `run_id` + checkpointer replays completed steps' cached
+  outputs and continues — verified across a fresh `SqliteCheckpointer` instance
+  (simulated restart) with zero worker re-runs.
+
+### 4. methodoverload decision
+- **Not a site.** Waived; no type-dispatch operation here.
+
+### 5. Failure modes
+- LLM router hallucinating a worker name — tolerant match against known names,
+  else `OrchestrationError` (no silent misroute).
+- SQLite write contention under very heavy parallel writes — WAL mitigates;
+  documented limit.
+- Non-JSON-serializable handoff input/output — `json.dumps(default=str)` coerces
+  for storage; a truly unserializable object degrades to its `str()` in the
+  checkpoint (documented; the live object still flows in-process).
+- `max_steps`/context-cap defaults may be wrong for exotic workflows — both
+  configurable, both raise clearly.
+
+### 6. The one thing most likely to be asked in review
+"Your checkpointer resumes across a restart — how do you know a step that was
+mid-flight when the process died isn't wrongly trusted as complete?" Answer: a
+step is written `running` *before* the worker runs and only flipped to
+`completed` *after* it returns, in a committed transaction. On resume only
+`completed` steps are replayed; a `running` (killed mid-flight) step is re-run.
+The `status` column is exactly this crash-safety signal.
+
+---
+
 ## Module 7 — Agent Metrics — 2026-07-19
 
 ### 1. What was built
