@@ -40,6 +40,14 @@ class TracerSeam(Protocol):
         """Return a context manager representing one execution span."""
         ...
 
+    def current_trace_id(self) -> str | None:
+        """The active span's trace id (source of truth), or None if untraced."""
+        ...
+
+    def collect(self, trace_id: str) -> tuple[Any, ...]:
+        """Drain the spans recorded for ``trace_id`` (empty when untraced)."""
+        ...
+
 
 class CostSeam(Protocol):
     """Contract for the cost tracker (real impl: Module 3)."""
@@ -66,6 +74,12 @@ class NullTracer:
     @contextmanager
     def span(self, name: str, **attributes: Any) -> Iterator[None]:
         yield None
+
+    def current_trace_id(self) -> str | None:
+        return None
+
+    def collect(self, trace_id: str) -> tuple[Any, ...]:
+        return ()
 
 
 class NullCostTracker:

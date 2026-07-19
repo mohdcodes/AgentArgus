@@ -24,6 +24,7 @@ from agentargus.core import (
     ToolCall,
 )
 from agentargus.logging import configure_logging, get_logger
+from agentargus.observability import Tracer
 
 __version__ = "0.1.0.dev0"
 
@@ -31,6 +32,7 @@ __all__ = [
     "__version__",
     "Agent",
     "BaseAgent",
+    "Tracer",
     "RunResult",
     "Span",
     "ToolCall",

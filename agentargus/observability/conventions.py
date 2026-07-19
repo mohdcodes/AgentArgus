@@ -18,10 +18,25 @@ __all__ = [
     "GEN_AI_REQUEST_MODEL",
     "GEN_AI_USAGE_INPUT_TOKENS",
     "GEN_AI_USAGE_OUTPUT_TOKENS",
+    "SPAN_AGENT_RUN",
+    "SPAN_TOOL_CALL",
+    "OP_INVOKE_AGENT",
+    "OP_EXECUTE_TOOL",
 ]
 
+# --- Attribute keys (GenAI semantic conventions) --------------------------- #
 GEN_AI_SYSTEM = "gen_ai.system"
 GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
 GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+
+# --- Canonical span names (AgentArgus-internal, stable across the codebase) - #
+SPAN_AGENT_RUN = "agent.run"
+SPAN_TOOL_CALL = "tool.call"
+
+# --- gen_ai.operation.name values ------------------------------------------ #
+# VERIFY against the current OTel GenAI spec before adding new operation names;
+# "invoke_agent" / "execute_tool" are the established values at time of writing.
+OP_INVOKE_AGENT = "invoke_agent"
+OP_EXECUTE_TOOL = "execute_tool"

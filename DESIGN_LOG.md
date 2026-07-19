@@ -6,6 +6,70 @@ the top.
 
 ---
 
+## Module 2 — Observability: Tracer — 2026-07-19
+
+### 1. What was built
+- **`observability/tracer.py`** — `Tracer`, a thin OO wrapper over
+  `opentelemetry-sdk`. Encapsulates provider/exporter/processor setup; exposes
+  `span(name, **attrs)` (context manager), `current_trace_id()`,
+  `collect(trace_id)`, and a `@traced` decorator (sync + async).
+- **`CollectorProcessor`** — a private `SpanProcessor` that buffers finished
+  spans keyed by trace id, so spans reach `RunResult.spans` *and* the real
+  exporter simultaneously.
+- **`conventions.py`** — extended with canonical span names (`SPAN_AGENT_RUN`,
+  `SPAN_TOOL_CALL`) and operation-name values (`OP_INVOKE_AGENT`,
+  `OP_EXECUTE_TOOL`).
+- **`agents/agent.py`** — `arun` now adopts the OTel trace id as source of truth
+  and drains spans onto the `RunResult`. `agents/seams.py` — `TracerSeam` gains
+  `current_trace_id`/`collect`; `NullTracer` returns `None`/`()`.
+- **`pyproject.toml`** — added the `[otlp]` optional extra
+  (`opentelemetry-exporter-otlp-proto-http`).
+
+### 2. Why this shape
+- **Exporter chosen from a string, wiring hidden (encapsulation).** `memory`
+  (tests), `console` (dev), `otlp` (Jaeger/collector, optional). `_make_exporter`
+  is the single place that maps names to exporters.
+- **Collector processor runs alongside the exporter, not instead of it.** This
+  is what lets `RunResult.spans` be populated even while exporting to Jaeger —
+  export and capture are not mutually exclusive.
+- **OTel trace id is the source of truth** when a real tracer is active; the
+  Module 1 uuid4 is now the fallback for the untraced (`NullTracer`) path. This
+  resolves the "placeholder id" open item from Module 1 and matches the
+  HARD_QUESTIONS #2 answer (one W3C trace id per run, no competing schemes).
+- **`Agent.arun` structure barely changed** — it still calls
+  `with self._tracer.span(...)`. Swapping `NullTracer` for `Tracer` is a
+  constructor argument; the orchestration body only *reads* two new seam methods.
+  This is the null-object seam bet from Module 1 paying off exactly as designed.
+
+### 3. Reuse points introduced
+- `conventions.py` is now consumed by both `Agent` (operation name) and the
+  Tracer/tests (span names) — the single source of truth for OTel keys.
+- `_readable_to_span` — the one place OTel `ReadableSpan` → our `Span` dataclass
+  conversion lives (ns→s, parent linkage, attribute copy).
+
+### 4. methodoverload decision
+- **Not used in Module 2.** No "same operation, different runtime types" site
+  here. Correctly waived.
+
+### 5. Failure modes
+- OTel `start_time`/`end_time` are integer nanoseconds; we divide by 1e9 to get
+  float seconds. If a span is never ended (shouldn't happen with the context
+  manager) `end_time` could be `None` → coerced to 0.
+- `CollectorProcessor` buffers by trace id and only frees on `collect()`. A run
+  whose trace is never drained would leak that buffer; `Agent.arun` always
+  drains, but a user calling `Tracer.span` directly and never `collect`-ing
+  would accumulate. Documented.
+- `SimpleSpanProcessor` exports synchronously (fine for tests/dev). Production
+  under load may want `BatchSpanProcessor`; deferred until it matters.
+
+### 6. The one thing most likely to be asked in review
+"You attach TWO span processors — the exporter's and your collector's. Isn't
+that double work per span?" Answer: yes, one extra in-memory append per span,
+which is negligible next to export I/O, and it's the price of getting
+`RunResult.spans` without disabling export. The collector does no I/O.
+
+---
+
 ## Module 1 — Agents (`BaseAgent`, `Agent` facade) — 2026-07-19
 
 ### 1. What was built

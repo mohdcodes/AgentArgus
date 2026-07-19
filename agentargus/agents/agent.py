@@ -44,7 +44,11 @@ from agentargus.agents.seams import (
 )
 from agentargus.core import RunResult
 from agentargus.logging import get_logger, reset_trace_id, set_trace_id
-from agentargus.observability.conventions import GEN_AI_OPERATION_NAME
+from agentargus.observability.conventions import (
+    GEN_AI_OPERATION_NAME,
+    OP_INVOKE_AGENT,
+    SPAN_AGENT_RUN,
+)
 
 __all__ = ["Agent"]
 
@@ -143,17 +147,29 @@ class Agent(BaseAgent):
         # id; logs during the outer run carry the outer id. Module 2's OTel
         # Tracer formalises this as a parent/child span tree; today they are
         # independent-but-nested ids, never merged.
-        trace_id = _new_trace_id()
-        token = set_trace_id(trace_id)
+        # Placeholder id used only for log correlation until we learn the real
+        # OTel trace id inside the span (the tracer's id is the source of truth
+        # when tracing is active; NullTracer returns None so this uuid4 stands).
+        fallback_id = _new_trace_id()
+        token = set_trace_id(fallback_id)
+        spans: tuple[Any, ...] = ()
         try:
             _logger.debug("agent.run start name=%s", self._name)
-            with self._tracer.span("agent.run", **{GEN_AI_OPERATION_NAME: "invoke_agent"}):
+            with self._tracer.span(SPAN_AGENT_RUN, **{GEN_AI_OPERATION_NAME: OP_INVOKE_AGENT}):
+                # Adopt the real trace id as soon as the span is open so that
+                # logs emitted during the run correlate to the OTel trace.
+                otel_id = self._tracer.current_trace_id()
+                if otel_id is not None:
+                    set_trace_id(otel_id)
                 output = await self._reliability(self._call_inner, input)
                 cost = self._cost.total()
+            trace_id = otel_id or fallback_id
+            spans = self._tracer.collect(trace_id)
             _logger.info("agent.run done name=%s cost=$%.4f", self._name, cost.total_cost)
             return RunResult(
                 output=output,
                 trace_id=trace_id,
+                spans=spans,
                 cost=cost,
                 metadata={"agent_name": self._name},
             )

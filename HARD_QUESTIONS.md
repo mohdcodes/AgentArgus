@@ -6,6 +6,54 @@ gate does not close until the owner can answer its batch in their own words.
 
 ---
 
+## Module 2 — Observability: Tracer
+
+1. You register two `SpanProcessor`s — the exporter's and your `CollectorProcessor`.
+   Walk through what happens to a single span from `on_end` to landing in
+   `RunResult.spans`. What's the per-span overhead, and why is it acceptable?
+
+2. `CollectorProcessor` buffers spans in a dict keyed by trace id and only frees
+   a buffer on `collect()`. Describe a usage pattern that leaks memory. What
+   guarantees `Agent.arun` doesn't leak, and what would you add to protect the
+   direct-`Tracer`-use case?
+
+3. The OTel trace id is now the source of truth, replacing Module 1's uuid4.
+   What exactly happens to `RunResult.trace_id` and to the log-correlation
+   contextvar at the moment the span opens? Trace the ordering — is there a
+   window where a log line carries the uuid4 instead of the OTel id?
+
+4. `SimpleSpanProcessor` exports synchronously on the calling thread. For a
+   high-throughput production agent, what's the consequence, and when would you
+   switch to `BatchSpanProcessor`? What do you lose by batching?
+
+5. You convert OTel nanosecond timestamps to float seconds. What precision do
+   you lose, and could two spans ever get the same `start_time` after
+   conversion? Does anything in the system depend on them being distinct?
+
+6. The tracer depends on OTel's `SpanExporter` *interface*, not a concrete
+   backend (the abstraction pillar). Name a second exporter you could drop in
+   with zero changes to `Tracer`, and one you couldn't — why?
+
+7. `current_trace_id()` reads `get_current_span()`. In an async run with multiple
+   concurrent agent tasks, does each task see its own current span, or could
+   they cross-contaminate? Justify via OTel's context propagation + contextvars.
+
+8. Nested spans nest via OTel's context (child's `parent_id` = parent's
+   `span_id`). But when an `Agent` wraps another `Agent`, each has its own
+   `Tracer` with its own provider — so the inner spans are in a *different*
+   trace. Is that right, or should they share one trace? Argue it.
+
+9. `Tracer.__init__` builds a fresh `TracerProvider` per instance rather than
+   using the global OTel provider. Why? What breaks if two `Tracer`s fought over
+   the global provider, and what do you give up by not using it?
+
+10. Your `[otlp]` extra is optional and `_make_exporter` raises a friendly
+    ImportError if it's missing. Is deferring that import to call-time the right
+    call versus importing at module top? What's the trade-off for startup and
+    for discoverability of the dependency?
+
+---
+
 ## Module 1 — Agents (`BaseAgent`, `Agent` facade)
 
 1. You chose "async-core, sync-wraps": `run()` calls `asyncio.run(self.arun())`.

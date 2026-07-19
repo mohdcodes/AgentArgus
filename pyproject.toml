@@ -41,6 +41,7 @@ dev = [
 ]
 langgraph = ["langgraph>=0.2"]
 docs = ["pdoc>=14.0"]
+otlp = ["opentelemetry-exporter-otlp-proto-http>=1.20"]
 
 [project.urls]
 Homepage = "https://github.com/mohdcodes/agentargus"
