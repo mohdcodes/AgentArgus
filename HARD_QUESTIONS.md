@@ -6,6 +6,164 @@ gate does not close until the owner can answer its batch in their own words.
 
 ---
 
+## Module 4 — Reliability
+
+> Context-block format: Deep Research Agent example + code citation + Claude
+> Code's own answer. Read it, then write yours below.
+
+### 1. Compose order — why breaker → fallback → retry (inner)?
+
+**Context:**
+- *Research-agent example:* the synthesis step calls `claude-opus-4-8` with
+  retry(3) + fallback to `claude-sonnet-5` + a breaker. Opus is having a bad
+  minute (intermittent 503s).
+- *Code:* `ReliabilityPolicy._ordered_strategies` returns `[breaker, fallback,
+  retry]` (outer→inner); `__call__` wraps `reversed()` so retry is innermost.
+- *My answer:* retry innermost means we retry *each model* a few times before
+  giving up on it and switching (opus×3, then sonnet×3), not retry-the-whole-
+  fallback-chain. Breaker outermost means if opus's endpoint is already known-
+  down, we fail fast without even trying. The rejected order (retry outermost)
+  multiplies attempts (retry × fallback) and retries even when the breaker is
+  open.
+
+*Your answer:*
+
+### 2. What gets retried — and why not everything?
+
+**Context:**
+- *Research-agent example:* retrieval raises `TimeoutError` (transient, worth
+  retrying) on one call and `ValueError` (a bug in the query parser) on another.
+- *Code:* `RetryWithBackoff` has `DEFAULT_RETRYABLE = (TransientError,
+  TimeoutError, ConnectionError)`; a non-matching exception hits the
+  `except BaseException` branch and re-raises after one attempt.
+- *My answer:* retry only transient/network failures. Retrying a `ValueError`
+  from a code bug wastes 3 attempts (and money) on something that will never
+  succeed. The retryable set is user-overridable for cases we didn't anticipate.
+
+*Your answer:*
+
+### 3. CircuitBreaker thread safety — prove it
+
+**Context:**
+- *Research-agent example:* 20 concurrent synthesis calls all hit a failing
+  endpoint at once; their `record_failure()` calls race.
+- *Code:* `CircuitBreaker` guards every transition with `self.__lock`
+  (`threading.Lock`); counters are name-mangled (`__consecutive_failures`).
+  Test `test_thread_safe_record_failure` runs 8 threads × 1000 failures.
+- *My answer:* yes, thread-safe. All reads/writes of the state + counters happen
+  inside the lock, so concurrent `record_failure` can't interleave into a
+  corrupt state. The lock matters because sync inner callables run on
+  `to_thread` worker threads (async-core reality), so genuinely-concurrent
+  access is real, not hypothetical.
+
+*Your answer:*
+
+### 4. Recovered failures still recorded — why keep the noise?
+
+**Context:**
+- *Research-agent example:* retrieval's attempt 1 and 2 fail transiently, attempt
+  3 succeeds. The run "succeeded" — should the two failures show up anywhere?
+- *Code:* `RetryContext.record_error(exc, recovered=True, attempt=n)` appends an
+  `ErrorRecord` per failed attempt; `Agent.arun` puts them on
+  `RunResult.errors`.
+- *My answer:* yes, record them with `recovered=True`. Transient failures that
+  were overcome are early-warning signals (a dependency degrading), and eval's
+  `ErrorRecoveryRate` metric (Module 7) computes recovery rate directly from
+  these records. Hiding them would blind both ops and eval.
+
+*Your answer:*
+
+### 5. Fallback is framework-agnostic — defend it
+
+**Context:**
+- *Research-agent example:* you fall back from `claude-opus-4-8` to a *local*
+  model, or even to a canned-response function — not necessarily another LLM.
+- *Code:* `FallbackChain.__init__` runs each alternative through
+  `to_async_callable`; a fallback is any callable or `BaseAgent`.
+- *My answer:* fallbacks are just callables, so the reliability layer never
+  learns about "models" or providers — matching the framework-agnostic bet. The
+  rejected "list of model names + factory" design would couple reliability to a
+  provider notion. Cost: the user constructs the callable themselves, but that's
+  one line and keeps the layer clean.
+
+*Your answer:*
+
+### 6. DeadLetterQueue behind an ABC — what does that buy?
+
+**Context:**
+- *Research-agent example:* in production you want dead-lettered queries to go to
+  Redis for a replay worker; in tests you want them in memory.
+- *Code:* `DeadLetterSink(ABC).append(record)`; `JsonlDeadLetterSink`,
+  `InMemoryDeadLetterSink` implement it; `DeadLetterQueue` wraps any sink.
+- *My answer:* the ABC is the abstraction pillar — swap JSONL→Redis→SQS with zero
+  `DeadLetterQueue` changes, and tests use the in-memory sink with no file I/O.
+  Second concrete impl proving the abstraction earns its keep: the in-memory sink
+  already exists and is used in tests.
+
+*Your answer:*
+
+### 7. The seam gained an errors channel — how, without breaking Passthrough?
+
+**Context:**
+- *Research-agent example:* a plain agent with no reliability configured must
+  still produce a `RunResult` (with empty errors); a policy-wrapped one fills
+  errors.
+- *Code:* `Agent.arun` reads `getattr(self._reliability, "last_errors", ())` —
+  duck-typed. `ReliabilityPolicy` exposes `last_errors`; `PassthroughReliability`
+  does not, so it yields `()`.
+- *My answer:* duck-typing keeps the null-object seam intact — I didn't have to
+  add a `last_errors` to `PassthroughReliability`. This is the same seam-
+  evolution pattern as Module 3's `table()`: the Agent asks for an optional
+  capability and degrades gracefully when it's absent.
+
+*Your answer:*
+
+### 8. to_async_callable was extracted — what duplication did it kill?
+
+**Context:**
+- *Research-agent example:* both `Agent(retrieval_fn)` and a fallback list
+  `[local_model_fn]` need the same sync-vs-async-vs-BaseAgent handling.
+- *Code:* `_internal/callables.py:to_async_callable` is now used by both
+  `Agent.wrap`'s object branch and `FallbackChain.__init__`.
+- *My answer:* before Module 4, only `Agent.wrap` normalised targets. Fallback
+  needed the identical logic. Rather than copy the `iscoroutinefunction` /
+  `to_thread` / `BaseAgent.arun` handling, I extracted it — one home, both import
+  it (the spec's "one behaviour, one home" rule).
+
+*Your answer:*
+
+### 9. Terminal failure: DLQ then re-raise. Why not return a RunResult?
+
+**Context:**
+- *Research-agent example:* a query fails retry AND fallback AND trips the
+  breaker — everything is exhausted.
+- *Code:* `ReliabilityPolicy.__call__` calls `self._dlq.put(...)` then `raise`;
+  `Agent.arun` currently lets that propagate.
+- *My answer:* v0.1.0 records the input to the DLQ and re-raises, so the caller
+  sees a real exception (fail loud, don't swallow). A future refinement (noted in
+  DESIGN_LOG §5) could turn a terminal failure into a `RunResult` with
+  `recovered=False` errors instead of raising — deliberately deferred; the gate
+  is the *recovered* path.
+
+*Your answer:*
+
+### 10. Backoff uses random jitter — is that a test-determinism problem?
+
+**Context:**
+- *Research-agent example:* CI must not flake because a retry slept a random
+  amount, and tests must not actually wait seconds.
+- *Code:* `RetryWithBackoff(sleep=...)` takes an injectable sleeper; tests pass
+  `_nosleep`. Jitter uses `random.random()` only to vary the *delay value*, which
+  tests ignore.
+- *My answer:* no determinism problem — tests inject a no-op sleeper, so the
+  random delay is computed but never waited on, and the retry *count*/behaviour
+  (what tests assert) is fully deterministic. Real runs get jittered backoff to
+  avoid thundering-herd retries.
+
+*Your answer:*
+
+---
+
 ## Module 3 — Observability: Cost Tracking
 
 > Context-block format: each question has a Deep Research Agent example, a code

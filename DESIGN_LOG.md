@@ -6,6 +6,75 @@ the top.
 
 ---
 
+## Module 4 — Reliability — 2026-07-19
+
+### 1. What was built
+- **`reliability/base.py`** — `ReliabilityStrategy(ABC)` (`execute(fn, inp, ctx)`)
+  and `RetryContext` (threads the tracer + error accumulator + step through the
+  composed strategies).
+- **`retry.py`** — `RetryWithBackoff`: exponential backoff + jitter, curated
+  retryable set (`TransientError`/`TimeoutError`/`ConnectionError`), injectable
+  sleeper for deterministic tests, `asyncio.sleep` by default.
+- **`fallback.py`** — `FallbackChain`: ordered callables/agents, try-next on any
+  exception, exhaustion re-raises last.
+- **`circuit_breaker.py`** — `CircuitBreaker`: lock-guarded CLOSED/OPEN/HALF_OPEN
+  state machine, fails fast with `CircuitOpenError` when OPEN.
+- **`dead_letter.py`** — `DeadLetterSink(ABC)` + `JsonlDeadLetterSink` +
+  `InMemoryDeadLetterSink` + `DeadLetterQueue`.
+- **`policy.py`** — `ReliabilityPolicy`: composes breaker→fallback→retry, DLQ on
+  terminal failure, exposes `last_errors`. It IS the `ReliabilitySeam`.
+- **`agents/agent.py`** — `arun` attaches `self._reliability.last_errors` (duck-
+  typed) to `RunResult.errors`.
+- **`_internal/callables.py`** — extracted `to_async_callable`, shared by
+  `Agent.wrap` and `FallbackChain` (one home for BaseAgent/sync/async normalisation).
+
+### 2. Why this shape
+- **breaker → fallback → retry (inner).** Retry a candidate a few times, then
+  switch candidates, with the breaker gating the whole thing. Retry innermost
+  avoids the retry×fallback attempt explosion the alternative ordering causes.
+- **Every attempt is an `ErrorRecord`** with `attempt` and `recovered` — a
+  recovered transient failure is still visible (early-warning signal), and eval's
+  `ErrorRecoveryRate` (Module 7) reads exactly this.
+- **Retryable set, not retry-everything.** Programming errors (ValueError/…)
+  re-raise immediately — don't waste attempts/money on a deterministic bug.
+- **Breaker is lock-guarded** — the honest answer to "is record_failure thread-
+  safe?"; a concurrency test hammers it from 8 threads.
+- **DLQ behind a `DeadLetterSink` ABC** — JSONL now, Redis/DB later, no queue
+  change (abstraction pillar).
+
+### 3. Reuse points introduced
+- `to_async_callable` (`_internal/callables.py`) — the single BaseAgent/sync/
+  async normaliser, now used by both `Agent.wrap` and `FallbackChain`.
+- `RetryContext.record_error` / `.span` — one home for producing `ErrorRecord`s
+  and reliability spans; every strategy uses it (no duplicated span/error code).
+- Reuses Module 0 `ErrorRecord`, Module 2 tracer seam, Module 3 `CostCeilingExceeded`
+  family in `_internal/exceptions.py`.
+
+### 4. methodoverload decision
+- **Not used — waived.** Reliability has no "same operation, different input
+  types" dispatch site. Forcing it would be decorative.
+
+### 5. Failure modes
+- Retry sleeps consume wall-clock; bounded by `max_delay` and attempt cap. Tests
+  inject a no-op sleeper so CI never waits.
+- A breaker shared across unrelated runs trips globally — intended (it protects a
+  shared dependency) but must be understood.
+- On terminal failure the policy DLQs then re-raises, so `Agent.arun` currently
+  propagates the exception (the recovered case is the gate). A future refinement
+  could turn a terminal failure into a `RunResult` with `recovered=False` errors
+  rather than raising.
+- JSONL DLQ is append-only, not deduplicated; replay tooling is out of scope.
+
+### 6. The one thing most likely to be asked in review
+"Your circuit breaker shares state across threads — is `record_failure`
+thread-safe? Prove it." Answer: yes — every transition is inside a
+`threading.Lock`, counters are name-mangled/private, and a test spawns 8 threads
+each calling `record_failure` 1000× and asserts the state stays consistent
+(OPEN, no corruption). The lock is correct under the async-core + `to_thread`
+reality where sync inner calls run on worker threads.
+
+---
+
 ## Module 3 — Observability: Cost Tracking — 2026-07-19
 
 ### 1. What was built

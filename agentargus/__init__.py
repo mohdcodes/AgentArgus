@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from agentargus._internal.exceptions import (
     AgentArgusError,
+    CircuitOpenError,
     ConfigError,
     CostCeilingExceeded,
     SerializationError,
+    TransientError,
 )
 from agentargus.agents import Agent, BaseAgent
 from agentargus.config import AgentArgusConfig, Judge, batch_complete
@@ -26,6 +28,14 @@ from agentargus.core import (
 )
 from agentargus.logging import configure_logging, get_logger
 from agentargus.observability import CostTracker, Tracer, Usage
+from agentargus.reliability import (
+    CircuitBreaker,
+    DeadLetterQueue,
+    FallbackChain,
+    JsonlDeadLetterSink,
+    ReliabilityPolicy,
+    RetryWithBackoff,
+)
 
 __version__ = "0.1.0.dev0"
 
@@ -36,6 +46,12 @@ __all__ = [
     "Tracer",
     "CostTracker",
     "Usage",
+    "ReliabilityPolicy",
+    "RetryWithBackoff",
+    "FallbackChain",
+    "CircuitBreaker",
+    "DeadLetterQueue",
+    "JsonlDeadLetterSink",
     "RunResult",
     "Span",
     "ToolCall",
@@ -49,6 +65,8 @@ __all__ = [
     "ConfigError",
     "SerializationError",
     "CostCeilingExceeded",
+    "TransientError",
+    "CircuitOpenError",
     "get_logger",
     "configure_logging",
 ]

@@ -166,11 +166,16 @@ class Agent(BaseAgent):
                 rows = table()
                 if rows:
                     metadata["cost_ledger"] = rows
+            # Collect any ErrorRecords the reliability policy accumulated (each
+            # retry/fallback/trip). Duck-typed so PassthroughReliability (which
+            # has no last_errors) yields none.
+            errors = tuple(getattr(self._reliability, "last_errors", ()))
             return RunResult(
                 output=output,
                 trace_id=trace_id,
                 spans=spans,
                 cost=cost,
+                errors=errors,
                 metadata=metadata,
             )
         finally:

@@ -12,6 +12,8 @@ __all__ = [
     "ConfigError",
     "SerializationError",
     "CostCeilingExceeded",
+    "TransientError",
+    "CircuitOpenError",
 ]
 
 
@@ -52,3 +54,21 @@ class CostCeilingExceeded(AgentArgusError):
             f"Cost ceiling exceeded: ${total_usd:.4f} would exceed the "
             f"${ceiling_usd:.4f} limit. Halting to prevent further spend."
         )
+
+
+class TransientError(AgentArgusError):
+    """Marker for a transient, retryable failure.
+
+    Callers can raise this (or a subclass) to signal RetryWithBackoff that an
+    operation is worth retrying, without depending on network-library-specific
+    exception types. It is in the default retryable set.
+    """
+
+
+class CircuitOpenError(AgentArgusError):
+    """Raised by CircuitBreaker when the circuit is OPEN — the call is refused.
+
+    The breaker fails fast instead of calling a dependency it believes is down,
+    giving it time to recover. This is a *controlled* failure, recorded in
+    ``RunResult.errors``, not a crash.
+    """
