@@ -35,3 +35,7 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 dead_letter*.jsonl
+
+# Internal planning / study docs (not for the public repo)
+IMPLEMENTAION.md
+module_notes/
