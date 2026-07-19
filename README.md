@@ -211,24 +211,103 @@ Spans are always on `result.spans` too — Jaeger is the optional visual layer.
 
 ---
 
-## Public API
+## Public API reference
 
-```python
-from agentargus import (
-    Agent, BaseAgent,                                   # wrap
-    Tracer, CostTracker, Usage,                         # observability + cost
-    ReliabilityPolicy, RetryWithBackoff, FallbackChain,
-    CircuitBreaker, DeadLetterQueue, JsonlDeadLetterSink,   # reliability
-    Metric, EvalSuite, EvalDataset, EvalRunner, EvalReport, # eval
-    Faithfulness, AnswerRelevance, ContextPrecision, ContextRecall,
-    ToolUseAccuracy, ToolSuccessRate, ErrorRecoveryRate, PlanCoherence,
-    SupervisorAgent, Handoff, LLMRouter, SqliteCheckpointer,  # orchestration
-    Checkpoint, Decision, CallbackApprovalBackend, ConsoleApprovalBackend,  # HITL
-    Judge, Embedder, AgentArgusConfig,                  # seams / config
-    RunResult, Span, ToolCall, Step, ErrorRecord, CostBreakdown,   # core
-    record_tool_call, record_step, get_logger,
-)
-```
+Everything below is importable directly: `from agentargus import <name>`.
+
+### Agents — wrap & run
+
+| Name | What it is |
+|------|-----------|
+| `Agent(inner, *, tracer=None, cost=None, reliability=None, name=None)` | The facade. Wraps any callable / `BaseAgent`, adds the collaborators you pass, and returns a `RunResult`. `.run(input)` (sync) / `.arun(input)` (async). |
+| `BaseAgent` | ABC defining the `arun()`/`run()` contract. Subclass it for a custom agent; `Agent` and `SupervisorAgent` are `BaseAgent`s. |
+| `record_tool_call(name, args=None, result=None, *, success=True, latency=0.0, error=None)` | Call inside your agent to record a tool invocation onto the run (feeds tool metrics + traces). |
+| `record_step(kind, content, **metadata)` | Record a reasoning/action step (feeds `PlanCoherence` + traces). |
+| `Recorder` | The object those two functions write to; bound per-run by `Agent`. Rarely used directly. |
+
+### Observability & cost
+
+| Name | What it is |
+|------|-----------|
+| `Tracer(exporter="memory", service_name="agentargus")` | OpenTelemetry tracer. `exporter`: `"memory"` \| `"console"` \| `"otlp"`. Emits spans with GenAI conventions; supplies the run's `trace_id`. |
+| `CostTracker(pricing=None, *, ceiling_usd=None, tracer=None)` | Prices reported token usage. `pricing`: `{model: (in_per_1M, out_per_1M)}`. `add_usage(usage, *, model, step)`, `total()`, `table()`; raises `CostCeilingExceeded` past the ceiling. |
+| `Usage(input_tokens, output_tokens)` | A typed token-usage record you can pass to `add_usage`. |
+| `get_logger(name=None)` | The one sanctioned logger factory (namespaced under `agentargus`). |
+| `configure_logging(level="INFO", *, color=True, json_format=False, stream=None)` | Configure the root logger (color/JSON, TTY-aware). |
+
+### Reliability
+
+| Name | What it is |
+|------|-----------|
+| `ReliabilityPolicy(*, retry=None, retries=None, fallbacks=None, breaker=None, dead_letter=None, tracer=None)` | Composes strategies (**breaker → fallback → retry**) into one policy; pass to `Agent(reliability=...)`. |
+| `RetryWithBackoff(max_attempts=3, *, base_delay=0.5, max_delay=30.0, jitter=0.1, retryable=(...))` | Exponential backoff + jitter; retries only transient errors by default. |
+| `FallbackChain(alternatives)` | Ordered list of alternative callables/agents; tries the next on any failure. |
+| `CircuitBreaker(failure_threshold=5, *, cooldown=30.0)` | Thread-safe CLOSED→OPEN→HALF_OPEN state machine; fails fast when open. |
+| `DeadLetterQueue(sink)` / `JsonlDeadLetterSink(path)` | Persists permanently-failed inputs; JSONL sink is the default backend. |
+
+### Evaluation
+
+| Name | What it is |
+|------|-----------|
+| `Metric` | ABC for all metrics; `compute(run_result_or_dict) -> float`. |
+| `EvalSuite(metrics)` | Runs a `list[Metric]`; `run(source) -> {name: score}`, `score(result) -> RunResult`. |
+| `EvalDataset` | Load eval cases: `load(source)` (str path / list / dict) or `from_jsonl(path)`. |
+| `EvalCase(question, reference=None, contexts=(), metadata={})` | One dataset case. |
+| `EvalRunner(concurrency=8)` | Batches an agent over a dataset: `run(agent, dataset, suite) -> EvalReport`. |
+| `EvalReport` | `summary()`, `regressions(baseline, threshold=0.05)`, `to_html()`, `to_dict()`. |
+| **RAG metrics** (need a `judge=`) | `Faithfulness`, `AnswerRelevance` (optional `embedder=`), `ContextPrecision`, `ContextRecall` (needs a `reference`). |
+| **Agent metrics** | `ToolUseAccuracy` (needs `expected_tools`), `ToolSuccessRate`, `ErrorRecoveryRate` (all no-LLM), `PlanCoherence` (needs a `judge=`). |
+
+### Orchestration
+
+| Name | What it is |
+|------|-----------|
+| `SupervisorAgent(workers, *, router, max_steps=10, checkpointer=None, run_id=None, tracer=None, dead_letter=None, name=...)` | Routes to `{name: BaseAgent}` workers, follows a handoff chain. Is-a `BaseAgent`. |
+| `Handoff(target, input, context={})` | Returned by a worker to pass control to the next worker. |
+| `LLMRouter(judge, descriptions=None)` | Default router — an LLM picks the best worker. (Any `route(input, workers)->name` works.) |
+| `SqliteCheckpointer(path=":memory:")` | Durable (WAL) per-step checkpoint store; enables resume across a restart. |
+
+### Human-in-the-loop
+
+| Name | What it is |
+|------|-----------|
+| `Checkpoint(backend, *, name="checkpoint", checkpointer=None, run_id=None)` | A pause point: `await require_approval(context) -> Decision`; rejection raises `CheckpointRejected` (recorded as a controlled failure). |
+| `Decision(approved, reason=None, edited_input=None)` | The approval result; `edited_input` lets a human redirect the run. |
+| `ApprovalBackend` | Protocol: `async decide(context) -> Decision`. |
+| `CallbackApprovalBackend(fn)` | Wrap any sync/async callable as a backend (Slack/UI/API). |
+| `ConsoleApprovalBackend()` | Prompts stdin (fails safe to reject in non-TTY/CI). |
+| `AutoApproveBackend()` / `AutoRejectBackend(reason=...)` | Always approve / reject — for tests and policy. |
+
+### Seams & configuration
+
+| Name | What it is |
+|------|-----------|
+| `Judge` | Protocol you inject for LLM-as-judge: `complete(prompt) -> str` (optional `complete_batch`). No client bundled. |
+| `Embedder` | Optional protocol for embeddings: `embed(texts) -> list[list[float]]` (used by `AnswerRelevance`). |
+| `AgentArgusConfig` | Cross-cutting config resolved from env + kwargs (`from_env(**overrides)`). |
+| `batch_complete(judge, prompts)` | Helper that uses a judge's `complete_batch` if present, else loops. |
+
+### Core objects
+
+| Name | What it is |
+|------|-----------|
+| `RunResult` | The canonical, immutable result: `output`, `trace_id`, `spans`, `cost`, `tool_calls`, `steps`, `errors`, `scores`, `metadata`; `with_scores()`, `to_dict()`/`from_dict()`. |
+| `Span`, `ToolCall`, `Step`, `ErrorRecord`, `CostBreakdown` | The value objects that populate a `RunResult`. |
+
+### Exceptions
+
+| Name | Raised when |
+|------|-------------|
+| `AgentArgusError` | Base class for all AgentArgus errors. |
+| `ConfigError` | Invalid configuration (e.g. malformed cost ceiling) — fails fast. |
+| `CostCeilingExceeded` | Accumulated spend crosses the configured ceiling. |
+| `TransientError` | Marker you raise to signal a retryable failure. |
+| `CircuitOpenError` | The circuit breaker is OPEN and refuses the call. |
+| `OrchestrationError` | A supervisor problem (loop / unknown worker / oversized context). |
+| `CheckpointRejected` | A HITL checkpoint was rejected (caught → recorded as a controlled failure). |
+| `SerializationError` | A `RunResult` field can't be serialized (names the field). |
+
+`agentargus.__version__` holds the installed version string.
 
 ---
 

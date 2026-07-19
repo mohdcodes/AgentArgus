@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentargus"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Framework-agnostic evaluation, observability, and reliability for LLM agents."
 readme = "README.md"
 requires-python = ">=3.10"

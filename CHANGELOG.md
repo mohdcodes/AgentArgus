@@ -4,7 +4,9 @@ All notable changes to AgentArgus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.0] — 2026-07-20
+
+First public release.
 
 ### Added
 - **Core** — `RunResult` (deeply-immutable canonical result) + value objects
@@ -28,5 +30,3 @@ All notable changes to AgentArgus are documented here. The format is based on
 - **Examples** — resume RAG, multi-tool agent, and an end-to-end deep-research
   demo exercising every capability.
 - Injectable `Judge` / `Embedder` protocols; no LLM client bundled in core.
-
-_First public release: `0.1.0` (see `docs/releasing.md`)._
