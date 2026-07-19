@@ -6,6 +6,63 @@ the top.
 
 ---
 
+## Module 6 — Eval: Dataset + Runner + Report — 2026-07-19
+
+### 1. What was built
+- **`eval/dataset.py`** — `EvalCase` (question + optional reference/contexts/
+  metadata) and `EvalDataset` with `load` = **methodoverload site #1**
+  (str path / list records / dict single), `from_jsonl`, per-row validation.
+- **`eval/runner.py`** — `EvalRunner` (async `gather` under a semaphore cap,
+  sync `run` driver), `CaseResult` (run + scores + captured error).
+- **`eval/report.py`** + **`templates/report.html.j2`** — `EvalReport`:
+  `summary()`, `regressions(baseline, threshold)`, `to_html()`, `to_dict()`.
+
+### 2. Why this shape
+- **Concurrency via `asyncio.gather` + `Semaphore(8)`** — batches many cases
+  fast without hammering the LLM API; the async-core from Module 1 pays off
+  directly here. Cap is configurable.
+- **Failing case is captured, not fatal** — `_eval_one` catches, records the
+  error on the `CaseResult`, and the batch continues. One bad case in 50 doesn't
+  lose the other 49's scores.
+- **Case→metric bridge = scoring view.** The runner merges each case's
+  question/reference/contexts into a copy of the `RunResult.metadata` (via
+  `dataclasses.replace`) so metrics read them — and **agent-produced contexts
+  win** over the case's pre-set ones. Agents aren't forced to know the eval
+  metadata convention.
+- **Regression = per-metric mean drop > threshold (0.05)** — interpretable,
+  no scipy, catches real drops without flagging run-to-run LLM noise.
+- **Self-contained HTML** (inline CSS, no external assets) so a report opens/
+  attaches anywhere; `to_dict` covers programmatic/CI use.
+
+### 3. Reuse points introduced
+- Reuses `EvalSuite`/metrics (Module 5), `Agent.arun` (Module 1), `RunResult`,
+  `ConfigError` (Module 3 family), and `jinja2` (a base dep since Module 0).
+- The sync `run` loop-guard mirrors `BaseAgent.run` exactly — same pattern, no
+  new invention.
+
+### 4. methodoverload decision — site #1 (`EvalDataset.load`)
+Used, cleanly type-dispatched on str/list/dict. Same recurring constraints: no
+`from __future__ import annotations`; bare `str`/`list`/`dict` (scoped
+`type: ignore[type-arg]`). Verified `load(42)` raises `NoMatchingOverloadError`.
+
+### 5. Failure modes
+- Concurrency cap too high → API rate limits; wrap the agent with Module 4's
+  reliability to absorb. Default 8 is conservative.
+- Mean-based regression is a blunt signal, not statistical proof — documented.
+- The Jinja template is a non-`.py` asset; it MUST ship in the wheel or
+  `to_html` fails at runtime. Added `[tool.hatch.build.targets.wheel].artifacts`
+  and verified the template is inside the built wheel.
+
+### 6. The one thing most likely to be asked in review
+"Your regression check compares means with a fixed 0.05 threshold — how do you
+avoid flagging normal LLM run-to-run variance as a regression, and how do you
+avoid missing a real 0.04 drop?" Answer: the threshold trades sensitivity for
+noise; it's a first-pass signal, configurable per call, and a statistical test
+(bootstrap/t-test) is the documented upgrade path when datasets are large enough
+to warrant it.
+
+---
+
 ## Module 5 — Eval Metrics (RAG) — 2026-07-19
 
 ### 1. What was built

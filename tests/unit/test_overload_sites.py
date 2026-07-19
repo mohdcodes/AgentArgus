@@ -116,3 +116,31 @@ class TestMetricComputeSite:
 
         with pytest.raises(NoMatchingOverloadError):
             self._metric().compute(42)  # neither RunResult nor dict
+
+
+class TestDatasetLoadSite:
+    """Site #1: EvalDataset.load dispatches on str / list / dict."""
+
+    def test_list_branch(self) -> None:
+        from agentargus.eval import EvalDataset
+
+        assert len(EvalDataset().load([{"question": "a"}, {"question": "b"}])) == 2
+
+    def test_dict_branch(self) -> None:
+        from agentargus.eval import EvalDataset
+
+        assert len(EvalDataset().load({"question": "solo"})) == 1
+
+    def test_str_branch(self, tmp_path: Any) -> None:
+        from agentargus.eval import EvalDataset
+
+        p = tmp_path / "c.jsonl"
+        p.write_text('{"question": "x"}\n', encoding="utf-8")
+        assert len(EvalDataset().load(str(p))) == 1
+
+    def test_unsupported_type_raises_no_matching_overload(self) -> None:
+        from agentargus.eval import EvalDataset
+        from methodoverload import NoMatchingOverloadError
+
+        with pytest.raises(NoMatchingOverloadError):
+            EvalDataset().load(42)

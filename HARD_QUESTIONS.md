@@ -6,6 +6,158 @@ gate does not close until the owner can answer its batch in their own words.
 
 ---
 
+## Module 6 — Eval: Dataset + Runner + Report
+
+> Context-block format: Deep Research Agent example + code citation + Claude
+> Code's own answer. Read it, then write yours below.
+
+### 1. Concurrency cap — why 8, and what breaks without it?
+
+**Context:**
+- *Research-agent example:* eval a 50-question dataset; each case = 1 agent run +
+  up to 4 judge calls = ~250 LLM calls.
+- *Code:* `EvalRunner.arun` wraps each case in `async with asyncio.Semaphore(8)`
+  and `asyncio.gather`s them.
+- *My answer:* unbounded `gather` would fire all 50 cases (250 calls) at once →
+  provider rate-limit/429 storms. The semaphore caps in-flight cases at 8, fast
+  but polite. Without it you'd need the reliability layer just to survive your
+  own eval. 8 is a conservative default; configurable per runner.
+
+*Your answer:*
+
+### 2. One failing case — why capture instead of raise?
+
+**Context:**
+- *Research-agent example:* case #37 of 50 throws (a malformed query crashes the
+  agent). You still want the other 49 scored.
+- *Code:* `EvalRunner._eval_one` wraps the run in `try/except`, returning a
+  `CaseResult(result=None, error=...)` on failure.
+- *My answer:* an eval batch is a measurement, not a transaction — losing 49
+  good scores because 1 case crashed is the wrong trade. We capture the error on
+  that case (visible in the report, `_failures` count, red row in HTML) and press
+  on. Contrast with `Agent.run`, where a single run's failure IS the result.
+
+*Your answer:*
+
+### 3. The scoring view — why merge case fields into metadata?
+
+**Context:**
+- *Research-agent example:* the dataset case has the ground-truth `reference`;
+  the agent's `RunResult` doesn't know about it. ContextRecall needs it.
+- *Code:* `EvalRunner._scoring_view` does `replace(result, metadata={**result.metadata, question, reference, contexts?})`.
+- *My answer:* the metrics read inputs from `RunResult.metadata` (Module 5's
+  convention), but the *dataset* holds the reference/expected-contexts. The
+  runner bridges them by producing a scoring-view RunResult with the case fields
+  merged in — without mutating the original run (immutability via `replace`).
+  Agent-produced contexts win; the case's fill in only if the agent produced none.
+
+*Your answer:*
+
+### 4. Agent contexts win over case contexts — why that precedence?
+
+**Context:**
+- *Research-agent example:* the case ships pre-retrieved contexts for offline
+  testing, but the live agent actually retrieved its own. Which does
+  ContextPrecision score?
+- *Code:* `_scoring_view` only uses `case.contexts` `if not md.get("contexts")`.
+- *My answer:* if the agent retrieved, THOSE are what actually fed the answer, so
+  they're what we should judge — scoring the case's stale pre-set contexts would
+  measure the wrong thing. Case contexts are a fallback for offline/agent-doesn't-
+  retrieve scenarios. Precedence encodes "score what really happened."
+
+*Your answer:*
+
+### 5. Regression threshold — noise vs. sensitivity
+
+**Context:**
+- *Research-agent example:* baseline faithfulness 0.85; today 0.82 (noise?) vs.
+  0.72 (real drop?).
+- *Code:* `EvalReport.regressions` flags when `current - baseline < -threshold`
+  (default 0.05).
+- *My answer:* 0.05 threshold treats 0.82 as noise (not flagged) and 0.72 as a
+  regression (flagged). It's a deliberately blunt first-pass signal — configurable,
+  and the documented upgrade is a bootstrap/t-test when the dataset is big enough
+  for significance to mean something. A fixed threshold can miss a real 0.04 drop;
+  that's the accepted trade for not crying wolf on variance.
+
+*Your answer:*
+
+### 6. Self-contained HTML — why inline everything?
+
+**Context:**
+- *Research-agent example:* you email the eval report to a teammate or attach it
+  to a PR.
+- *Code:* `report.html.j2` has inline `<style>`, no external CSS/JS/fonts.
+- *My answer:* a report that needs a CDN or sibling asset breaks the moment it
+  leaves your machine (offline, email attachment, CI artifact). Inlining makes it
+  a single portable file that opens anywhere — the same self-containment
+  principle the Artifact system uses. Cost: no shared stylesheet, but a report is
+  a leaf document, not an app.
+
+*Your answer:*
+
+### 7. The Jinja template is a non-.py file — what did that require?
+
+**Context:**
+- *Research-agent example:* a user `pip install agentargus` and calls
+  `report.to_html()` — the template must be present in the installed package.
+- *Code:* `pyproject.toml` `[tool.hatch.build.targets.wheel].artifacts =
+  ["agentargus/eval/templates/*.j2"]`; `report.py` loads it via
+  `FileSystemLoader(Path(__file__).parent / "templates")`.
+- *My answer:* wheels ship `.py` by default; a `.j2` asset would be silently
+  omitted and `to_html` would `TemplateNotFound` at runtime for installed users
+  (but pass in the dev tree — a nasty "works on my machine" bug). I declared it
+  as a build artifact AND verified it's inside the built wheel with a zipfile
+  check.
+
+*Your answer:*
+
+### 8. EvalRunner.run mirrors BaseAgent.run's loop-guard — coincidence?
+
+**Context:**
+- *Research-agent example:* calling `runner.run(...)` from a notebook that already
+  has an event loop.
+- *Code:* `EvalRunner.run` does the same `get_running_loop()` → raise pattern as
+  `BaseAgent.run`.
+- *My answer:* not a coincidence — both are sync drivers over async cores, so
+  both face the "called inside a running loop" problem and answer it the same
+  way (raise with a "use arun" hint, don't nest loops). It's a deliberately
+  repeated pattern; arguably it could be extracted to a shared helper if a third
+  sync-driver appears (rule of three — not yet).
+
+*Your answer:*
+
+### 9. summary() mixes metric means with _-prefixed meta keys — clean?
+
+**Context:**
+- *Research-agent example:* `summary()` returns `{"faithfulness": 0.8,
+  "_cases": 50, "_failures": 1, "_total_cost_usd": 1.23}`.
+- *Code:* meta keys are `_`-prefixed; `regressions` skips `name.startswith("_")`.
+- *My answer:* one dict keeps summary a single object, and the `_` convention
+  separates metrics from meta so regression logic never compares "_cases"
+  against a baseline. Alternative (two separate dicts/fields) is arguably cleaner
+  typing but splits "the summary" into pieces. The `_`-prefix is a pragmatic,
+  documented convention — the same instinct as private attributes.
+
+*Your answer:*
+
+### 10. Report holds RunResults for every case — memory at scale?
+
+**Context:**
+- *Research-agent example:* a 10,000-case eval — the report retains every
+  `CaseResult` (with its full `RunResult`: spans, cost, output).
+- *Code:* `EvalReport.__init__(self, case_results: list[CaseResult])` keeps them
+  all in memory.
+- *My answer:* fine for the realistic v0.1.0 scale (dozens–hundreds of cases),
+  and keeping full results enables the per-case HTML table + drill-down. At
+  10k+ it would be memory-heavy — the documented path is streaming/aggregating
+  incrementally (keep summary + a bounded sample of full results). Deferred:
+  YAGNI until someone runs eval at that scale.
+
+*Your answer:*
+
+---
+
 ## Module 5 — Eval Metrics (RAG)
 
 > Context-block format: Deep Research Agent example + code citation + Claude

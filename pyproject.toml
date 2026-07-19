@@ -49,6 +49,8 @@ Repository = "https://github.com/mohdcodes/agentargus"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agentargus"]
+# Ship the Jinja HTML template (non-.py asset) inside the wheel.
+artifacts = ["agentargus/eval/templates/*.j2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
