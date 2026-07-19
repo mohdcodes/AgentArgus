@@ -6,6 +6,163 @@ gate does not close until the owner can answer its batch in their own words.
 
 ---
 
+## Module 7 — Agent Metrics
+
+> Context-block format: Deep Research Agent example + code citation + Claude
+> Code's own answer. Read it, then write yours below.
+
+### 1. "How do you judge correct tool use?" — the split
+
+**Context:**
+- *Research-agent example:* the agent should call `web_search`, `fetch_page`,
+  `calculator` for a revenue-growth question. How do you score whether it did?
+- *Code:* `ToolUseAccuracy` (F1 vs. `metadata["expected_tools"]`, N/A if absent)
+  and `ToolSuccessRate` (successes/total) in `eval/metrics/agent.py`.
+- *My answer:* "correct" needs a ground truth, so `ToolUseAccuracy` requires an
+  author-labeled expected list and abstains (NOT_APPLICABLE) without one — it
+  never guesses. `ToolSuccessRate` answers a *different*, always-available
+  question ("did the calls work?"). Splitting them was the resolution to the
+  "how can we possibly know the right tool?" problem: the dataset author knows;
+  we don't invent it.
+
+*Your answer:*
+
+### 2. ToolUseAccuracy requires a label — is abstaining the right call?
+
+**Context:**
+- *Research-agent example:* you run 50 questions but only labeled `expected_tools`
+  on 20 of them.
+- *Code:* `ToolUseAccuracy._score` returns `NOT_APPLICABLE` (logged at INFO) when
+  `expected_tools` is empty; `EvalSuite` drops NaN.
+- *My answer:* abstaining is honest — scoring the 30 unlabeled cases against an
+  empty expected set would either crash or produce a meaningless number. You get
+  accuracy on the 20 you labeled and nothing fabricated for the rest. Same
+  posture as ContextRecall-without-reference.
+
+*Your answer:*
+
+### 3. Name-set F1 ignores order and arguments — a hole?
+
+**Context:**
+- *Research-agent example:* the agent calls `fetch_page` BEFORE `web_search`
+  (nonsensical), or calls `calculator("wrong expr")` — both still score 1.0 on
+  tool selection.
+- *Code:* `ToolUseAccuracy._score` compares `set(expected)` vs.
+  `{tc.name for tc in tool_calls}`.
+- *My answer:* yes, it's a deliberate v0.1.0 scope — it measures *selection*
+  (the most common failure: didn't call the tool at all / called a wrong one),
+  not ordering or argument correctness. Documented in the docstring + DESIGN_LOG
+  as a known limitation with order/arg-aware matching as the next step. Better a
+  clearly-scoped metric than a vaguely-comprehensive one.
+
+*Your answer:*
+
+### 4. The Recorder + sync inner functions — why does it work when trace_id doesn't?
+
+**Context:**
+- *Research-agent example:* a plain sync `research(q)` function calls
+  `record_tool_call(...)`; it runs in a `to_thread` worker, yet the calls appear
+  on the RunResult.
+- *Code:* `Agent.arun` sets a `Recorder` in a contextvar before the inner call;
+  sync inner runs via `asyncio.to_thread`.
+- *My answer:* `to_thread` *copies* the context into the worker, so the worker
+  sees the same `Recorder` object. Because the recorder is *mutable* and we
+  *append* to it (never rebind the var), those appends land on the instance
+  `arun` reads back. trace_id differs because it's a *value* rebind
+  (`set_trace_id` in the worker wouldn't propagate out). Verified live.
+
+*Your answer:*
+
+### 5. ErrorRecoveryRate = 1.0 when there are no errors — defensible?
+
+**Context:**
+- *Research-agent example:* a clean run with zero failures. What's its recovery
+  rate?
+- *Code:* `ErrorRecoveryRate._score` returns 1.0 if `not inp.errors`.
+- *My answer:* "recovery rate" = "of the failures that happened, how many were
+  recovered." Zero failures = nothing to recover = a perfect 1.0 (you can't do
+  better than not failing). The alternative (NOT_APPLICABLE) would drop the
+  metric for healthy runs, which is worse — you'd lose the signal that the run
+  was clean. Contrast ToolUseAccuracy where absence is a *missing label*, not a
+  *good outcome*.
+
+*Your answer:*
+
+### 6. Three of four agent metrics use no LLM — why does that matter?
+
+**Context:**
+- *Research-agent example:* scoring tool success / recovery on a run offline, in
+  CI, with no API key.
+- *Code:* `ToolUseAccuracy`, `ToolSuccessRate`, `ErrorRecoveryRate` inherit
+  `Metric` (not `LLMJudgeMetric`) and call no judge.
+- *My answer:* they prove the `Metric` ABC isn't secretly an "LLM metric"
+  interface — the abstraction genuinely spans heuristic and LLM metrics
+  (checkpoint 6.1 asked for exactly a non-LLM concrete metric). Practically: they
+  run free, fast, and deterministically in CI, unlike the judge metrics.
+
+*Your answer:*
+
+### 7. PlanCoherence NOT_APPLICABLE vs. 0.0 for no steps
+
+**Context:**
+- *Research-agent example:* a simple agent that returns an answer without
+  recording any reasoning steps.
+- *Code:* `PlanCoherence._score` returns `NOT_APPLICABLE` if `not inp.steps`.
+- *My answer:* no recorded steps means "no plan to judge," not "a bad plan."
+  Scoring 0.0 would defame agents that simply don't emit steps (many don't). N/A
+  excludes it honestly. This is the same "missing data ≠ bad result" principle as
+  ContextRecall.
+
+*Your answer:*
+
+### 8. Expected tools live on the dataset case, not the Agent — why?
+
+**Context:**
+- *Research-agent example:* the RIGHT tools for "Tesla revenue growth" (needs a
+  calculator) differ from "who wrote Hamlet" (doesn't).
+- *Code:* `_from_run_result` reads `metadata["expected_tools"]`; the runner
+  merges the case's expected_tools in.
+- *My answer:* the correct tool set is *per question*, not per agent — a global
+  "available tools" registry on the Agent can't say which are right for THIS
+  case. So the label belongs on the dataset case (like the reference answer),
+  and the runner bridges it into scoring metadata. This is why we rejected
+  "register tools on the Agent."
+
+*Your answer:*
+
+### 9. MetricInput grew agent fields — did the overload site change?
+
+**Context:**
+- *Research-agent example:* the same `compute(run_result_or_dict)` now feeds both
+  RAG and agent metrics.
+- *Code:* `MetricInput` gained tool_calls/steps/errors/expected_tools; the
+  `@overload`s on `compute` (RunResult / dict) are unchanged, only `_from_*`
+  extraction got richer.
+- *My answer:* the overload contract is stable — richer extraction, same two
+  branches. RAG metrics ignore the new fields, agent metrics ignore the RAG
+  fields; each reads what it needs from one shared normalised input. No new
+  dispatch site, no changed signatures.
+
+*Your answer:*
+
+### 10. Recorder is opt-in — what if the agent never records?
+
+**Context:**
+- *Research-agent example:* a user wraps an agent that doesn't call
+  `record_tool_call` at all.
+- *Code:* `Agent.arun` still binds a `Recorder`; if nothing records,
+  `tool_calls`/`steps` are empty tuples.
+- *My answer:* opt-in is correct — AgentArgus can't magically know what tools an
+  arbitrary callable invoked (it's framework-agnostic). No recording → empty
+  tool_calls → ToolSuccessRate/ToolUseAccuracy report NOT_APPLICABLE, honestly
+  saying "no tool data" rather than fabricating. The cost of framework-agnosticism
+  is that behaviour metrics need the user to emit the signal; the recorder makes
+  that one function call.
+
+*Your answer:*
+
+---
+
 ## Module 6 — Eval: Dataset + Runner + Report
 
 > Context-block format: Deep Research Agent example + code citation + Claude

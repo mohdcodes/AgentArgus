@@ -21,7 +21,7 @@ from typing import Any
 from methodoverload import overload
 
 from agentargus.config import Judge
-from agentargus.core import RunResult
+from agentargus.core import ErrorRecord, RunResult, Step, ToolCall
 from agentargus.logging import get_logger
 
 __all__ = ["Metric", "MetricInput", "LLMJudgeMetric", "NOT_APPLICABLE", "cosine_similarity"]
@@ -36,12 +36,22 @@ NOT_APPLICABLE = float("nan")
 
 @dataclass(frozen=True, slots=True)
 class MetricInput:
-    """Normalised inputs a RAG metric needs, from a RunResult or a test dict."""
+    """Normalised inputs a metric needs, from a RunResult or a test dict.
+
+    RAG fields (Module 5) plus agent-behaviour fields (Module 7). Agent metrics
+    read tool_calls/steps/errors; ``expected_tools`` is the author-supplied
+    ground truth for ToolUseAccuracy (empty ⇒ not applicable).
+    """
 
     question: str
     answer: str
     contexts: tuple[str, ...] = ()
     reference: str | None = None  # ground truth, for ContextRecall
+    # --- agent-behaviour fields (Module 7) --- #
+    tool_calls: tuple[ToolCall, ...] = ()
+    steps: tuple[Step, ...] = ()
+    errors: tuple[ErrorRecord, ...] = ()
+    expected_tools: tuple[str, ...] = ()  # ground truth, for ToolUseAccuracy
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -73,12 +83,15 @@ class Metric(ABC):
     @staticmethod
     def _from_run_result(result: RunResult) -> MetricInput:
         md = result.metadata
-        contexts = tuple(md.get("contexts", ()) or ())
         return MetricInput(
             question=str(md.get("question", "")),
             answer=str(result.output),
-            contexts=contexts,
+            contexts=tuple(md.get("contexts", ()) or ()),
             reference=md.get("reference"),
+            tool_calls=tuple(result.tool_calls),
+            steps=tuple(result.steps),
+            errors=tuple(result.errors),
+            expected_tools=tuple(md.get("expected_tools", ()) or ()),
         )
 
     @staticmethod
@@ -88,6 +101,10 @@ class Metric(ABC):
             answer=str(source.get("answer", "")),
             contexts=tuple(source.get("contexts", ()) or ()),
             reference=source.get("reference"),
+            tool_calls=tuple(source.get("tool_calls", ()) or ()),
+            steps=tuple(source.get("steps", ()) or ()),
+            errors=tuple(source.get("errors", ()) or ()),
+            expected_tools=tuple(source.get("expected_tools", ()) or ()),
         )
 
     @abstractmethod

@@ -1,5 +1,11 @@
 """Evaluation metrics: the Metric ABC and the RAG metric implementations."""
 
+from agentargus.eval.metrics.agent import (
+    ErrorRecoveryRate,
+    PlanCoherence,
+    ToolSuccessRate,
+    ToolUseAccuracy,
+)
 from agentargus.eval.metrics.base import (
     NOT_APPLICABLE,
     LLMJudgeMetric,
@@ -22,4 +28,8 @@ __all__ = [
     "AnswerRelevance",
     "ContextPrecision",
     "ContextRecall",
+    "ToolUseAccuracy",
+    "ToolSuccessRate",
+    "ErrorRecoveryRate",
+    "PlanCoherence",
 ]

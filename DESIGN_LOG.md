@@ -6,6 +6,62 @@ the top.
 
 ---
 
+## Module 7 — Agent Metrics — 2026-07-19
+
+### 1. What was built
+- **`eval/metrics/agent.py`** — `ToolUseAccuracy`, `ToolSuccessRate`,
+  `ErrorRecoveryRate` (all no-judge), `PlanCoherence` (LLM judge over steps).
+- **`agents/recorder.py`** — `Recorder` + a contextvar + module-level
+  `record_tool_call` / `record_step` the inner agent calls.
+- **`agents/agent.py`** — `arun` binds a fresh `Recorder` per run and collects
+  its `tool_calls`/`steps` onto the `RunResult`. Fills the standing gap: those
+  fields were always empty tuples before.
+- **`eval/metrics/base.py`** — `MetricInput` extended with tool_calls/steps/
+  errors/expected_tools; extraction updated. Overload site #4 shape unchanged.
+
+### 2. Why this shape — resolving "how do we judge correct tool use?"
+The owner's real question. "Correct" is undefined without ground truth, so it
+split into two honest metrics:
+- **`ToolUseAccuracy`** = F1(expected names, actual names). **Requires** an
+  author-supplied `metadata["expected_tools"]` label (like `reference` for
+  ContextRecall); NOT_APPLICABLE without it — never guesses the "right" tool.
+- **`ToolSuccessRate`** = successes/total from the `success` flag; works on any
+  run with zero setup.
+`ErrorRecoveryRate` reads Module 4's `recovered` flag (1.0 if no errors).
+`PlanCoherence` judges steps (NOT_APPLICABLE if none). *Expected* comes from the
+dataset; *actual* from the recorder — the same labels-in-dataset / behaviour-
+from-run split as RAG.
+
+### 3. Reuse points introduced
+- `Recorder` contextvar mirrors `set_trace_id`/`reset_trace_id` exactly.
+- Reuses `Metric`/`LLMJudgeMetric`/overload #4, `EvalSuite`, `RunResult` fields,
+  Module 4's `recovered`. Three metrics are pure-heuristic — the concrete
+  non-LLM `Metric` that proves the ABC isn't LLM-specific (checkpoint 6.1).
+
+### 4. methodoverload decision
+- **Not a new site.** `MetricInput` got richer but `compute` is still site #4
+  (RunResult vs dict), unchanged.
+
+### 5. Failure modes
+- **ToolUseAccuracy is name-set F1** — ignores call order and arguments; an agent
+  that calls the right tools in a nonsensical order still scores 1.0.
+  Order/arg-sensitive matching is a documented future option.
+- **Recorder + sync inner fn:** unlike trace_id, this DOES work under
+  `asyncio.to_thread` — `to_thread` copies the context, and the `Recorder` is a
+  *mutable object* we append to (not a rebind), so appends land on the same
+  instance. Verified. A raw `threading.Thread` still needs the explicit
+  `recorder=` escape hatch.
+- **PlanCoherence** carries the same judge-subjectivity caveat as the RAG judges.
+
+### 6. The one thing most likely to be asked in review
+"Your ToolUseAccuracy is order- and argument-insensitive set F1 — an agent that
+calls the right tools in the wrong order, or with wrong args, still scores 1.0.
+Isn't that a hole?" Answer: yes, deliberately — v0.1.0 measures *tool selection*,
+the most common failure. Order/args matching is a documented next step; the
+metric's docstring and this log state the limitation so a reviewer isn't misled.
+
+---
+
 ## Module 6 — Eval: Dataset + Runner + Report — 2026-07-19
 
 ### 1. What was built

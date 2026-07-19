@@ -34,6 +34,7 @@ from typing import Any
 from methodoverload import overload
 
 from agentargus.agents.base import BaseAgent
+from agentargus.agents.recorder import Recorder, reset_recorder, set_recorder
 from agentargus.agents.seams import (
     CostSeam,
     NullCostTracker,
@@ -147,6 +148,10 @@ class Agent(BaseAgent):
         # The uuid4 fallback is used only when no tracer is active
         # (NullTracer.current_trace_id() -> None).
         token = set_trace_id(None)
+        # Bind a fresh recorder for this run so the inner fn can record_tool_call
+        # / record_step; collected onto the RunResult below (Module 7).
+        recorder = Recorder()
+        rec_token = set_recorder(recorder)
         spans: tuple[Any, ...] = ()
         try:
             with self._tracer.span(SPAN_AGENT_RUN, **{GEN_AI_OPERATION_NAME: OP_INVOKE_AGENT}):
@@ -175,8 +180,11 @@ class Agent(BaseAgent):
                 trace_id=trace_id,
                 spans=spans,
                 cost=cost,
+                tool_calls=recorder.tool_calls,
+                steps=recorder.steps,
                 errors=errors,
                 metadata=metadata,
             )
         finally:
             reset_trace_id(token)
+            reset_recorder(rec_token)
