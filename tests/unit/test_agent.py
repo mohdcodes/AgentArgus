@@ -99,6 +99,36 @@ class TestTraceCorrelation:
         assert seen["during"] == result.trace_id
         assert get_trace_id() is None  # cleared after run
 
+    def test_nested_agents_get_distinct_nested_trace_ids(self) -> None:
+        # Trace model: each Agent.arun() sets its OWN trace_id. When one Agent
+        # delegates to another Agent, the inner run shadows the outer's id for
+        # its duration, then the outer's is restored (contextvar token nesting).
+        # The two ids NEST — they do not compete or merge.
+        #
+        # NOTE: this holds specifically because the inner is a real ``Agent``
+        # (which calls set_trace_id). A *bare* BaseAgent that never sets an id
+        # would simply inherit the outer's context — that is correct behaviour,
+        # not a bug: only Agent participates in the trace-id scheme.
+        seen: dict[str, str | None] = {}
+        inner_agent = Agent(lambda x: x, name="inner")
+
+        async def delegating(x: Any) -> Any:
+            seen["outer_during"] = get_trace_id()
+            inner_result = await inner_agent.arun(x)
+            seen["inner_own"] = inner_result.trace_id
+            seen["outer_after_inner"] = get_trace_id()
+            return inner_result.output
+
+        outer_result = Agent(delegating, name="outer").run("x")
+
+        # The inner Agent produced its own, distinct trace_id.
+        assert seen["inner_own"] != seen["outer_during"]
+        # After the inner returned, the outer's trace_id was restored (nesting).
+        assert seen["outer_after_inner"] == seen["outer_during"]
+        assert seen["outer_during"] == outer_result.trace_id
+        # And the context is fully cleared once everything unwinds.
+        assert get_trace_id() is None
+
     def test_trace_id_in_logs(self) -> None:
         stream = io.StringIO()
         configure_logging(level="DEBUG", color=False, json_format=True, stream=stream)

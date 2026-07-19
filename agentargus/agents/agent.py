@@ -135,6 +135,14 @@ class Agent(BaseAgent):
     # Orchestration — written in final shape; seams are null objects for now
     # ------------------------------------------------------------------ #
     async def arun(self, input: Any) -> RunResult:
+        # Trace model: exactly ONE trace_id per arun() call — including a nested
+        # inner agent's own arun(). When agents nest, trace_ids NEST rather than
+        # compete: the inner call's set_trace_id shadows the outer's for its
+        # duration, and reset_trace_id (via the contextvar token) restores the
+        # outer's afterward. So logs emitted during the inner run carry the inner
+        # id; logs during the outer run carry the outer id. Module 2's OTel
+        # Tracer formalises this as a parent/child span tree; today they are
+        # independent-but-nested ids, never merged.
         trace_id = _new_trace_id()
         token = set_trace_id(trace_id)
         try:
