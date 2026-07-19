@@ -39,3 +39,10 @@ dead_letter*.jsonl
 # Internal planning / study docs (not for the public repo)
 IMPLEMENTAION.md
 module_notes/
+
+# Personal / private example data (never push the owner's real resume)
+examples/resume_rag/resume.pdf
+examples/resume_rag/resume.txt
+# Generated demo/eval artifacts
+examples/**/report.html
+report.html

@@ -119,6 +119,11 @@ class SupervisorAgent(BaseAgent):
 
     async def arun(self, input: Any) -> RunResult:
         errors: list[ErrorRecord] = []
+        # Aggregate each worker's observability into the supervisor's result so
+        # the whole multi-agent run is inspectable (worker retries, tool calls,
+        # and reasoning steps all surface on the final RunResult).
+        agg_tool_calls: list[Any] = []
+        agg_steps: list[Any] = []
         first = self._route(input)
         current: Handoff | Any = Handoff(target=first, input=input)
         output: Any = None
@@ -161,6 +166,10 @@ class SupervisorAgent(BaseAgent):
                 with self._span(f"orchestrate.{worker_name}", step=step):
                     result = await self._workers[worker_name].arun(current.input)
                 output = result.output
+                # Roll the worker's observability up into the supervisor's.
+                agg_tool_calls.extend(result.tool_calls)
+                agg_steps.extend(result.steps)
+                errors.extend(result.errors)
             except Exception as exc:  # noqa: BLE001 - graceful partial failure
                 errors.append(
                     ErrorRecord(
@@ -179,7 +188,13 @@ class SupervisorAgent(BaseAgent):
                     self._dlq.put(input=current.input, error=exc, step=worker_name)
                 _logger.warning("worker %s failed at step %d: %s", worker_name, step, exc)
                 # Return a partial RunResult rather than crashing.
-                return self._assemble(output=None, errors=errors, failed=True)
+                return self._assemble(
+                    output=None,
+                    errors=errors,
+                    failed=True,
+                    tool_calls=agg_tool_calls,
+                    steps=agg_steps,
+                )
 
             if self._checkpointer is not None:
                 self._checkpointer.save_step(
@@ -196,7 +211,13 @@ class SupervisorAgent(BaseAgent):
                 f"(likely a routing loop) for run {self._run_id}."
             )
 
-        return self._assemble(output=output, errors=errors, failed=False)
+        return self._assemble(
+            output=output,
+            errors=errors,
+            failed=False,
+            tool_calls=agg_tool_calls,
+            steps=agg_steps,
+        )
 
     # ------------------------------------------------------------------ #
     def _route(self, input: Any) -> str:
@@ -226,10 +247,20 @@ class SupervisorAgent(BaseAgent):
 
         return nullcontext()
 
-    def _assemble(self, *, output: Any, errors: list[ErrorRecord], failed: bool) -> RunResult:
+    def _assemble(
+        self,
+        *,
+        output: Any,
+        errors: list[ErrorRecord],
+        failed: bool,
+        tool_calls: list[Any] | None = None,
+        steps: list[Any] | None = None,
+    ) -> RunResult:
         return RunResult(
             output=output,
             trace_id=self._run_id,
+            tool_calls=tuple(tool_calls or ()),
+            steps=tuple(steps or ()),
             errors=tuple(errors),
             metadata={"agent_name": self._name, "run_id": self._run_id, "failed": failed},
         )

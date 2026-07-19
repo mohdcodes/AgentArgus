@@ -90,6 +90,9 @@ class EvalRunner:
         the agent produced none.
         """
         md: dict[str, Any] = dict(result.metadata)
+        # The case's freeform metadata (e.g. expected_tools for ToolUseAccuracy)
+        # is merged in first so metrics can read author-supplied labels.
+        md.update(dict(case.metadata))
         md["question"] = case.question
         if case.reference is not None:
             md["reference"] = case.reference

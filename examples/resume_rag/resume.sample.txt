@@ -1,0 +1,43 @@
+Jordan Rivera
+jordan.rivera@example.com | github.com/example | linkedin.com/in/example
+
+SUMMARY
+Backend software engineer with 5 years building reliable, observable services in
+Python and Go. Focused on distributed systems, API design, and developer tooling.
+
+EXPERIENCE
+
+Northwind Data, Remote — Senior Software Engineer (2023 – Present)
+Led the redesign of the ingestion pipeline, cutting median processing latency from
+40 minutes to under 3 by introducing streaming and backpressure.
+Built an internal observability library (traces + cost accounting) adopted by 6 teams.
+Mentored 3 junior engineers; owned the on-call runbook for the data platform.
+
+Acme Cloud, Berlin — Software Engineer (2020 – 2023)
+Designed and shipped a multi-region rate limiter handling 50k requests/second.
+Migrated a monolith's billing module to a service with zero customer-facing downtime.
+Introduced contract testing, reducing integration regressions by ~60%.
+
+Byteworks, Bangalore — Junior Developer (2019 – 2020)
+Built REST APIs in Flask; wrote the first automated test suite for the core product.
+
+PROJECTS
+
+trace-lite — Open Source (2022)
+A tiny OpenTelemetry-based tracing helper for Python services. ~800 GitHub stars.
+
+kv-bench — Benchmark Suite (2021)
+Reproducible benchmarks comparing embedded key-value stores under mixed workloads.
+
+SKILLS
+Languages: Python, Go, SQL, TypeScript
+Systems: Distributed systems, gRPC/REST APIs, message queues, caching
+Data & Infra: PostgreSQL, Redis, Kafka, Docker, Kubernetes, Terraform
+Observability: OpenTelemetry, Prometheus, Grafana, structured logging
+
+EDUCATION
+B.S. Computer Science, State University (2015 – 2019) — GPA 3.7
+
+ACHIEVEMENTS
+Speaker at a regional Python conference (2023) on service observability.
+Maintainer of two open-source Python libraries with combined 1k+ stars.

@@ -85,6 +85,7 @@ class Agent(BaseAgent):
         self._tracer: TracerSeam = tracer or NullTracer()
         self._cost: CostSeam = cost or NullCostTracker()
         self._reliability: ReliabilitySeam = reliability or PassthroughReliability()
+        self._inner_result: RunResult | None = None  # set when wrapping a BaseAgent
         self._call_inner = self.wrap(inner)
 
     # ------------------------------------------------------------------ #
@@ -100,6 +101,11 @@ class Agent(BaseAgent):
 
         async def call(inp: Any) -> Any:
             inner_result = await inner.arun(inp)
+            # Stash the inner result so arun() can merge its observability
+            # (errors/tool_calls/steps) into this facade's RunResult — otherwise
+            # a wrapped BaseAgent's recovered failures / tool calls would be
+            # invisible on the outer result.
+            self._inner_result = inner_result
             return inner_result.output
 
         return call
@@ -193,13 +199,22 @@ class Agent(BaseAgent):
             errors = tuple(getattr(self._reliability, "last_errors", ()))
             if hitl_error is not None:
                 errors = (*errors, hitl_error)
+            # Merge a wrapped inner BaseAgent's observability (its recovered
+            # failures, tool calls, and steps) so the outer result reflects the
+            # whole run, not just this facade's own layer.
+            tool_calls = recorder.tool_calls
+            steps = recorder.steps
+            if self._inner_result is not None:
+                errors = (*errors, *self._inner_result.errors)
+                tool_calls = (*tool_calls, *self._inner_result.tool_calls)
+                steps = (*steps, *self._inner_result.steps)
             return RunResult(
                 output=output,
                 trace_id=trace_id,
                 spans=spans,
                 cost=cost,
-                tool_calls=recorder.tool_calls,
-                steps=recorder.steps,
+                tool_calls=tool_calls,
+                steps=steps,
                 errors=errors,
                 metadata=metadata,
             )

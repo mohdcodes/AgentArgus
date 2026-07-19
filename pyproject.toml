@@ -42,10 +42,14 @@ dev = [
 langgraph = ["langgraph>=0.2"]
 docs = ["pdoc>=14.0"]
 otlp = ["opentelemetry-exporter-otlp-proto-http>=1.20"]
+# Dependencies for running the examples/ (NOT part of the core library).
+examples = ["anthropic>=0.34", "pypdf>=4.0"]
 
 [project.urls]
-Homepage = "https://github.com/mohdcodes/agentargus"
-Repository = "https://github.com/mohdcodes/agentargus"
+Homepage = "https://github.com/mohdcodes/AgentArgus"
+Repository = "https://github.com/mohdcodes/AgentArgus"
+Issues = "https://github.com/mohdcodes/AgentArgus/issues"
+Changelog = "https://github.com/mohdcodes/AgentArgus/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agentargus"]
