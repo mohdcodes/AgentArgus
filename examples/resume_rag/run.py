@@ -28,10 +28,9 @@ from examples._shared import get_llm  # noqa: E402
 from examples.resume_rag.agent import make_resume_agent  # noqa: E402
 
 QUESTIONS = [
-    "Where does the candidate currently work and what is their role?",
-    "What did the candidate build at Techdome?",
-    "What open-source library has the candidate published?",
-    "What is the candidate's GPA and where did they study?",
+    "ADD_YOUR_QUESTION_HERE_1",
+    "ADD_YOUR_QUESTION_HERE_2",
+    "ADD_YOUR_QUESTION_HERE_3", 
 ]
 
 
