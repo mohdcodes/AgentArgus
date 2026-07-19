@@ -40,6 +40,13 @@ uv run mypy agentargus     # type-check
 - [DESIGN_LOG.md](DESIGN_LOG.md) — per-module decision log.
 - [HARD_QUESTIONS.md](HARD_QUESTIONS.md) — review questions per module.
 
+## Credits
+
+The RAG evaluation metrics (faithfulness, answer relevance, context
+precision/recall) follow the methodology of [RAGAS](https://github.com/explodinggradients/ragas)
+(Apache-2.0). AgentArgus implements these definitions independently and does not
+depend on the `ragas` package.
+
 ## License
 
 MIT © Mohd Arbaaz Siddiqui

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from agentargus import CostTracker, Usage
 from agentargus.agents import Agent, BaseAgent
 from agentargus.core import RunResult
@@ -87,3 +88,31 @@ class TestAddUsageSite:
 
         with pytest.raises(TypeError):
             self._tracker().add_usage(object(), model="m")
+
+
+class TestMetricComputeSite:
+    """Site #4: Metric.compute dispatches on RunResult vs. dict."""
+
+    def _metric(self) -> Any:
+        import json
+
+        from agentargus import Faithfulness
+
+        class J:
+            def complete(self, prompt: str) -> str:
+                return json.dumps({"claims": ["a"], "supported": [True]})
+
+        return Faithfulness(judge=J())
+
+    def test_run_result_branch(self) -> None:
+        rr = RunResult(output="a", trace_id="t", metadata={"question": "q", "contexts": ["c"]})
+        assert self._metric().compute(rr) == 1.0
+
+    def test_dict_branch(self) -> None:
+        assert self._metric().compute({"answer": "a", "contexts": ["c"]}) == 1.0
+
+    def test_unsupported_type_raises_no_matching_overload(self) -> None:
+        from methodoverload import NoMatchingOverloadError
+
+        with pytest.raises(NoMatchingOverloadError):
+            self._metric().compute(42)  # neither RunResult nor dict

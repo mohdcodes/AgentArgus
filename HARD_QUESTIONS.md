@@ -6,6 +6,161 @@ gate does not close until the owner can answer its batch in their own words.
 
 ---
 
+## Module 5 — Eval Metrics (RAG)
+
+> Context-block format: Deep Research Agent example + code citation + Claude
+> Code's own answer. Read it, then write yours below.
+
+### 1. Modeling RAGAS vs. depending on it
+
+**Context:**
+- *Research-agent example:* you want faithfulness/context-precision scores on the
+  synthesis answer, the same metrics RAGAS is famous for.
+- *Code:* `eval/metrics/rag.py` implements the metrics from scratch, docstring
+  credits RAGAS; `pyproject.toml` has no `ragas` dependency.
+- *My answer:* we model RAGAS's published methodology (Apache-2.0, verified from
+  their docs) but don't depend on `ragas` — it pulls LangChain + a heavy tree,
+  against the single-package/minimal-dep bet, and RAGAS is literally the gap §1
+  says we fill. We get battle-tested definitions without the coupling or the
+  dependency weight. Trade-off: we maintain the implementations ourselves.
+
+*Your answer:*
+
+### 2. Faithfulness and judge bias
+
+**Context:**
+- *Research-agent example:* the synthesis answer makes 5 claims; a lenient judge
+  might rubber-stamp all 5 as "supported," inflating faithfulness to 1.0.
+- *Code:* `Faithfulness._score` prompts for `{"claims":[...],"supported":[...]}`
+  and returns `sum(supported)/len(supported)`.
+- *My answer:* we reduce bias by forcing *decomposition* — the judge must list
+  discrete claims and rule on each, so the score is a ratio of many small
+  checkable judgments, not one vague number. It doesn't eliminate bias;
+  calibration against human labels is future work. Tests pin the high/low paths
+  with a fake judge so the *arithmetic* is trusted even if the judge isn't.
+
+*Your answer:*
+
+### 3. AnswerRelevance needs embeddings — the fallback
+
+**Context:**
+- *Research-agent example:* you have a judge but no embedding model wired; you
+  still want an answer-relevance number.
+- *Code:* `AnswerRelevance._score` uses the injected `Embedder` (RAGAS's
+  gen-questions + cosine method) if present, else `_score_with_judge` (a direct
+  0–1 rating).
+- *My answer:* RAGAS's real method needs embeddings (mean cosine of generated
+  questions vs. the original). We ship no embedder (framework-agnostic), so we
+  offer an optional `Embedder` protocol for the exact method and a judge-scored
+  approximation when it's absent — documented as an approximation, not silently
+  different.
+
+*Your answer:*
+
+### 4. ContextPrecision is rank-aware — why does order matter?
+
+**Context:**
+- *Research-agent example:* retrieval returns 3 chunks; the relevant one is
+  ranked 1st in one run, 3rd in another. Same relevant/irrelevant set.
+- *Code:* `ContextPrecision._score` computes Average Precision:
+  `Σ (Precision@k · rel_k) / total_relevant`, treating `contexts` order as rank.
+- *My answer:* a good retriever puts relevant chunks first. Rank-aware AP rewards
+  that — relevant-at-rank-1 scores 1.0, relevant-at-rank-3 scores lower — where a
+  flat relevant/total fraction can't tell them apart. Verified: same set, better
+  ranking → higher score. This is why we implemented full AP, not a fraction.
+
+*Your answer:*
+
+### 5. ContextRecall needs ground truth — why NOT_APPLICABLE when absent?
+
+**Context:**
+- *Research-agent example:* you run the agent on a fresh query with no labeled
+  "correct answer." ContextRecall has nothing to measure recall *against*.
+- *Code:* `ContextRecall._score` returns `NOT_APPLICABLE` (NaN) if
+  `inp.reference` is missing; `EvalSuite.run` drops NaN scores.
+- *My answer:* recall is by definition "did we retrieve enough to cover the
+  *truth*" — without a ground-truth reference there is no truth to cover, so any
+  number would be fabricated. Returning NOT_APPLICABLE and excluding it is honest;
+  the alternative (score against the agent's own answer) measures something else
+  entirely (self-consistency) and would mislead.
+
+*Your answer:*
+
+### 6. Tolerant JSON parsing — masking a broken judge?
+
+**Context:**
+- *Research-agent example:* the judge model returns prose instead of JSON on one
+  of 100 dataset rows.
+- *Code:* `LLMJudgeMetric._ask_json` tries strict JSON, then a fenced block, then
+  a lenient `{...}` search, then logs a WARNING and returns a conservative
+  default.
+- *My answer:* one flaky response shouldn't fail a 100-row batch, so we degrade
+  gracefully. The risk is masking a *systematically* broken judge — mitigated by
+  the WARNING (visible signal) and a *conservative* default (Faithfulness→1.0 on
+  no-claims is vacuous, relevance→0.0). If every row warns, that's the tell.
+
+*Your answer:*
+
+### 7. compute() overload — RunResult vs dict, why both?
+
+**Context:**
+- *Research-agent example:* production scores a real `RunResult`; a unit test
+  wants to check Faithfulness on `{"answer":..,"contexts":[..]}` without building
+  a whole run.
+- *Code:* `Metric.compute` is overload site #4 — `@overload` on `RunResult` and
+  on `dict`, both → `MetricInput` → `_score`.
+- *My answer:* the dict overload makes metrics trivially unit-testable (no
+  RunResult scaffolding), while production uses the real object. Both normalise to
+  one `MetricInput` so scoring logic isn't duplicated. Same methodoverload
+  constraints as sites #2/#3 (no future-annotations, bare dict).
+
+*Your answer:*
+
+### 8. EvalSuite is polymorphic — prove it doesn't know concrete types
+
+**Context:**
+- *Research-agent example:* you evaluate with `[Faithfulness, ContextPrecision]`
+  today and add a custom `ToolUseAccuracy` (Module 7) tomorrow with no suite
+  change.
+- *Code:* `EvalSuite.run` does `{m.name: m.compute(source) for m in self.metrics}`
+  — it only knows the `Metric` interface.
+- *My answer:* the suite calls `compute`/reads `name` through the ABC; it never
+  branches on metric type. Adding a metric is adding a `Metric` subclass to the
+  list — open/closed. This is inheritance-based polymorphism, distinct from the
+  overload-based polymorphism inside `compute` (dispatch on input type).
+
+*Your answer:*
+
+### 9. Missing judge → raise, not NaN. Why?
+
+**Context:**
+- *Research-agent example:* someone writes `Faithfulness()` (forgot the judge)
+  and adds it to a suite that runs over 100 rows.
+- *Code:* `LLMJudgeMetric._require_judge` raises `ValueError` naming the metric.
+- *My answer:* a metric with no judge is a *configuration* mistake, not a data
+  condition — fail fast and loud with a fix hint, don't emit 100 NaNs that
+  silently drop the metric from every result (you'd think you evaluated
+  faithfulness when you didn't). Contrast with ContextRecall's NOT_APPLICABLE,
+  which IS a legitimate data condition (no reference).
+
+*Your answer:*
+
+### 10. with_scores once vs. per-metric — the efficiency note
+
+**Context:**
+- *Research-agent example:* scoring one run on 4 metrics.
+- *Code:* `EvalSuite.run` builds the full `dict` first; `score()` calls
+  `result.with_scores(dict)` exactly once.
+- *My answer:* `RunResult` is immutable, so each `with_scores` makes a new object.
+  Applying it once with all 4 scores creates one new RunResult, not four — the
+  "collect then apply once" pattern flagged back in Module 0's immutability
+  decision. Per-metric `with_scores` would allocate N results and only keep the
+  last.
+
+*Your answer:*
+
+---
+
 ## Module 4 — Reliability
 
 > Context-block format: Deep Research Agent example + code citation + Claude

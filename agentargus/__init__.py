@@ -17,7 +17,7 @@ from agentargus._internal.exceptions import (
     TransientError,
 )
 from agentargus.agents import Agent, BaseAgent
-from agentargus.config import AgentArgusConfig, Judge, batch_complete
+from agentargus.config import AgentArgusConfig, Embedder, Judge, batch_complete
 from agentargus.core import (
     CostBreakdown,
     ErrorRecord,
@@ -25,6 +25,14 @@ from agentargus.core import (
     Span,
     Step,
     ToolCall,
+)
+from agentargus.eval import (
+    AnswerRelevance,
+    ContextPrecision,
+    ContextRecall,
+    EvalSuite,
+    Faithfulness,
+    Metric,
 )
 from agentargus.logging import configure_logging, get_logger
 from agentargus.observability import CostTracker, Tracer, Usage
@@ -60,7 +68,14 @@ __all__ = [
     "CostBreakdown",
     "AgentArgusConfig",
     "Judge",
+    "Embedder",
     "batch_complete",
+    "Metric",
+    "EvalSuite",
+    "Faithfulness",
+    "AnswerRelevance",
+    "ContextPrecision",
+    "ContextRecall",
     "AgentArgusError",
     "ConfigError",
     "SerializationError",

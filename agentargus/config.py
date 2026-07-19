@@ -13,7 +13,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from agentargus._internal.exceptions import ConfigError
 
-__all__ = ["AgentArgusConfig", "Judge", "batch_complete"]
+__all__ = ["AgentArgusConfig", "Judge", "Embedder", "batch_complete"]
 
 
 @runtime_checkable
@@ -36,6 +36,21 @@ class Judge(Protocol):
         checks (HARD_QUESTIONS #6). Call sites use the ``batch_complete`` helper,
         which probes for ``complete_batch`` and falls back to looping.
         """
+        ...
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """Optional seam for text embeddings (used by RAGAS-style AnswerRelevance).
+
+    Like ``Judge``, no embedding backend ships in the base package. Inject any
+    implementation whose ``embed`` maps texts to vectors; AnswerRelevance then
+    uses cosine similarity exactly as RAGAS does. Absent → AnswerRelevance falls
+    back to a judge-scored relevance.
+    """
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return one embedding vector per input text."""
         ...
 
 

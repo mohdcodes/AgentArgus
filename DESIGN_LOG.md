@@ -6,6 +6,66 @@ the top.
 
 ---
 
+## Module 5 — Eval Metrics (RAG) — 2026-07-19
+
+### 1. What was built
+- **`eval/metrics/base.py`** — `Metric(ABC)` (compute = overload site #4),
+  `MetricInput`, `LLMJudgeMetric` (holds injected judge, tolerant `_ask_json`),
+  `NOT_APPLICABLE` sentinel, `cosine_similarity` helper.
+- **`eval/metrics/rag.py`** — `Faithfulness`, `AnswerRelevance`,
+  `ContextPrecision`, `ContextRecall`, methodology modeled on RAGAS.
+- **`eval/suite.py`** — `EvalSuite` (polymorphic `run` → dict; `score` → new
+  RunResult), NaN/NOT_APPLICABLE excluded.
+- **`config.py`** — `Embedder` protocol (optional, for AnswerRelevance).
+
+### 2. Why this shape — the RAGAS decision
+The owner asked whether to use RAGAS. Decision: **model the methodology on RAGAS
+(Apache-2.0), own the implementation, credit them — do NOT depend on `ragas`.**
+Rationale: `ragas` pulls LangChain + a heavy tree, which contradicts the
+single-package / minimal-dep bet in spec §1/§9, and RAGAS is named in §1 as the
+*gap* AgentArgus fills. I verified the actual RAGAS formulas from their docs
+(2026-07-19) before implementing, rather than guessing:
+- Faithfulness = supported claims / total claims. (matched my draft)
+- AnswerRelevance = mean cosine(gen_question_i, question) — **needs embeddings**;
+  we added an optional `Embedder` protocol with a judge-scored fallback.
+- ContextPrecision = **rank-aware Average Precision** (not a flat fraction) —
+  corrected my draft after reading the real definition.
+- ContextRecall = fraction of **ground-truth reference** claims attributable to
+  context — needs a reference; returns NOT_APPLICABLE when absent (honest).
+
+### 3. Reuse points introduced
+- `LLMJudgeMetric._ask_json` — one home for judge-call + JSON-parse + tolerant
+  fallback; all four metrics use it (no duplicated parsing).
+- `MetricInput` + `_from_run_result`/`_from_dict` — one normalisation the
+  overload feeds into; scoring logic isn't duplicated per input shape.
+- `cosine_similarity` — pure-Python, no numpy dep.
+- Reuses Module 0 `Judge`/`with_scores`; the `Embedder` mirrors the `Judge` seam.
+
+### 4. methodoverload decision — site #4 (`Metric.compute`)
+Used: `@overload` on `RunResult` vs `dict`, both → `MetricInput`. Same two
+constraints as prior sites: no `from __future__ import annotations`; bare `dict`
+(scoped `type: ignore[type-arg]`). Verified `compute(42)` raises
+`NoMatchingOverloadError`.
+
+### 5. Failure modes
+- **Judge bias** can inflate scores — mitigated by decomposition (claims), not a
+  single vague number; calibration remains a known open question (HARD_QUESTIONS).
+- **Tolerant parsing** can mask a systematically-malformed judge; the WARNING is
+  the signal and the conservative default avoids silently-high scores.
+- **AnswerRelevance without an embedder** is an approximation (judge-scored), not
+  RAGAS-exact — documented.
+- **ContextRecall without a reference** is NOT_APPLICABLE, excluded from scores.
+
+### 6. The one thing most likely to be asked in review
+"Faithfulness uses an LLM judge — how do you stop the judge's bias from silently
+inflating scores?" Answer: we force *decomposition* (claims + per-claim
+supported flags) so the score is a ratio of checkable sub-judgments, not one
+vague number; tests pin high/low with a fake judge; real calibration (judge vs.
+human labels) is future work. And we credit RAGAS's methodology rather than
+inventing our own unvalidated definition.
+
+---
+
 ## Module 4 — Reliability — 2026-07-19
 
 ### 1. What was built
