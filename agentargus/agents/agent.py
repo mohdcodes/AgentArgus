@@ -33,6 +33,7 @@ from typing import Any
 
 from methodoverload import overload
 
+from agentargus._internal.exceptions import CheckpointRejected
 from agentargus.agents.base import BaseAgent
 from agentargus.agents.recorder import Recorder, reset_recorder, set_recorder
 from agentargus.agents.seams import (
@@ -43,7 +44,7 @@ from agentargus.agents.seams import (
     ReliabilitySeam,
     TracerSeam,
 )
-from agentargus.core import RunResult
+from agentargus.core import ErrorRecord, RunResult
 from agentargus.logging import get_logger, reset_trace_id, set_trace_id
 from agentargus.observability.conventions import (
     GEN_AI_OPERATION_NAME,
@@ -153,17 +154,32 @@ class Agent(BaseAgent):
         recorder = Recorder()
         rec_token = set_recorder(recorder)
         spans: tuple[Any, ...] = ()
+        hitl_error: ErrorRecord | None = None
         try:
             with self._tracer.span(SPAN_AGENT_RUN, **{GEN_AI_OPERATION_NAME: OP_INVOKE_AGENT}):
                 otel_id = self._tracer.current_trace_id()
                 trace_id = otel_id or _new_trace_id()
                 set_trace_id(trace_id)  # bind BEFORE the first log line
                 _logger.debug("agent.run start name=%s", self._name)
-                output = await self._reliability(self._call_inner, input)
+                try:
+                    output = await self._reliability(self._call_inner, input)
+                except CheckpointRejected as exc:
+                    # A rejected HITL checkpoint is a CONTROLLED failure: record
+                    # it and return a partial RunResult, not a crash (spec §6.7).
+                    _logger.warning("run halted by checkpoint rejection: %s", exc)
+                    output = None
+                    hitl_error = ErrorRecord(
+                        error_type="CheckpointRejected",
+                        message=str(exc),
+                        recovered=False,
+                        metadata={"checkpoint": exc.checkpoint, "reason": exc.reason},
+                    )
                 cost = self._cost.total()
                 _logger.info("agent.run done name=%s cost=$%.4f", self._name, cost.total_cost)
             spans = self._tracer.collect(trace_id)
             metadata: dict[str, Any] = {"agent_name": self._name}
+            if hitl_error is not None:
+                metadata["failed"] = True
             # Surface the per-step cost ledger (which step, how many tokens, cost)
             # when the tracker keeps one. Duck-typed so NullCostTracker is fine.
             table = getattr(self._cost, "table", None)
@@ -173,8 +189,10 @@ class Agent(BaseAgent):
                     metadata["cost_ledger"] = rows
             # Collect any ErrorRecords the reliability policy accumulated (each
             # retry/fallback/trip). Duck-typed so PassthroughReliability (which
-            # has no last_errors) yields none.
+            # has no last_errors) yields none. Append a HITL rejection if any.
             errors = tuple(getattr(self._reliability, "last_errors", ()))
+            if hitl_error is not None:
+                errors = (*errors, hitl_error)
             return RunResult(
                 output=output,
                 trace_id=trace_id,

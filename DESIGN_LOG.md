@@ -6,6 +6,58 @@ the top.
 
 ---
 
+## Module 9 — Human-in-the-Loop — 2026-07-19
+
+### 1. What was built
+- **`hitl/checkpoint.py`** — `Checkpoint.require_approval(context) -> Decision`,
+  `Decision(approved, reason?, edited_input?)`, `ApprovalBackend` protocol +
+  `CallbackApprovalBackend`, `ConsoleApprovalBackend`, `AutoApprove/AutoReject`.
+- **`_internal/exceptions.py`** — `CheckpointRejected(checkpoint, reason)`.
+- **`agents/agent.py`** — `arun` catches `CheckpointRejected` → records an
+  `ErrorRecord(recovered=False)` + partial RunResult (`failed=True`), no crash.
+
+### 2. Why this shape
+- **Pluggable async-first backend.** Real HITL awaits a human over a network
+  (Slack/UI/queue), so `decide` is async; a sync callback is auto-wrapped via
+  `to_thread`. Console/Auto backends implement the same interface trivially.
+- **Rejection = controlled failure** (spec §6.7). `raise CheckpointRejected`,
+  caught by the run loop and recorded — a denied approval is auditable
+  (error_type + reason in `RunResult.errors`), not an exception the caller must
+  hand-handle. Reuses the exact partial-failure shape Module 8 established.
+- **`edited_input`** lets a reviewer redirect the agent (approve-with-
+  modification), not just yes/no — a common real HITL need.
+- **Explicit placement.** The agent calls `await checkpoint(context)` at the
+  risky point (like `record_tool_call`) — gate exactly what matters, nothing
+  forced globally.
+- **Pause/resume via Module 8 checkpointer.** A prior approval for
+  `(run_id, name)` is replayed instead of re-prompting — survives a restart.
+- **Console fail-safe:** non-TTY (CI) → reject with a log, never hang on stdin.
+
+### 3. Reuse points introduced
+- Reuses Module 8 `Checkpointer` (approval persistence/replay), Module 7 recorder
+  (`record_step` — approvals show in `RunResult.steps`), Module 0 `ErrorRecord`
+  + `AgentArgusError`. Almost pure composition.
+
+### 4. methodoverload decision
+- **Not a site.** Waived.
+
+### 5. Failure modes
+- Backend that never returns blocks the run — async lets the caller impose a
+  timeout (built-in timeout wrapper deferred; documented).
+- `edited_input` is trusted (no validation of the human's redirect) — documented.
+- Resume replays an approval even if the world changed since — same
+  "resume promptly" assumption as Module 8.
+
+### 6. The one thing most likely to be asked in review
+"A rejection raises — how is that not just a crash the user has to catch
+everywhere?" Answer: the `Agent`/`Supervisor` run loop catches `CheckpointRejected`
+and turns it into a first-class `ErrorRecord(recovered=False)` on a partial
+`RunResult` with the reason — so a denial is a normal, inspectable outcome
+(`result.metadata["failed"]`, `result.errors[0].reason`), never an unhandled
+exception. The user gates the action; AgentArgus handles the denial.
+
+---
+
 ## Module 8 — Orchestration Patterns (production-grade) — 2026-07-19
 
 ### 1. What was built

@@ -15,6 +15,7 @@ __all__ = [
     "TransientError",
     "CircuitOpenError",
     "OrchestrationError",
+    "CheckpointRejected",
 ]
 
 
@@ -82,3 +83,19 @@ class OrchestrationError(AgentArgusError):
     returning an unknown worker, accumulated handoff context exceeding the size
     cap. A controlled failure with a clear message, not an internal crash.
     """
+
+
+class CheckpointRejected(AgentArgusError):
+    """Raised when a human-in-the-loop checkpoint is rejected.
+
+    A *controlled* stop, not a crash: the surrounding Agent/Supervisor catches it
+    and records an ``ErrorRecord(recovered=False)`` with the reason on the
+    ``RunResult``, so a denied approval is auditable rather than an exception the
+    caller must handle by hand.
+    """
+
+    def __init__(self, checkpoint: str, reason: str | None = None) -> None:
+        self.checkpoint = checkpoint
+        self.reason = reason
+        detail = f": {reason}" if reason else ""
+        super().__init__(f"Checkpoint {checkpoint!r} was rejected{detail}.")

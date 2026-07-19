@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from agentargus._internal.exceptions import (
     AgentArgusError,
+    CheckpointRejected,
     CircuitOpenError,
     ConfigError,
     CostCeilingExceeded,
+    OrchestrationError,
     SerializationError,
     TransientError,
 )
@@ -51,6 +53,15 @@ from agentargus.eval import (
     PlanCoherence,
     ToolSuccessRate,
     ToolUseAccuracy,
+)
+from agentargus.hitl import (
+    ApprovalBackend,
+    AutoApproveBackend,
+    AutoRejectBackend,
+    CallbackApprovalBackend,
+    Checkpoint,
+    ConsoleApprovalBackend,
+    Decision,
 )
 from agentargus.logging import configure_logging, get_logger
 from agentargus.observability import CostTracker, Tracer, Usage
@@ -109,12 +120,21 @@ __all__ = [
     "Handoff",
     "LLMRouter",
     "SqliteCheckpointer",
+    "Checkpoint",
+    "Decision",
+    "ApprovalBackend",
+    "CallbackApprovalBackend",
+    "ConsoleApprovalBackend",
+    "AutoApproveBackend",
+    "AutoRejectBackend",
     "AgentArgusError",
     "ConfigError",
     "SerializationError",
     "CostCeilingExceeded",
     "TransientError",
     "CircuitOpenError",
+    "OrchestrationError",
+    "CheckpointRejected",
     "get_logger",
     "configure_logging",
 ]

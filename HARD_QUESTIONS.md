@@ -6,6 +6,159 @@ gate does not close until the owner can answer its batch in their own words.
 
 ---
 
+## Module 9 — Human-in-the-Loop
+
+> Context-block format: Deep Research Agent example + code citation + Claude
+> Code's own answer. Read it, then write yours below.
+
+### 1. Rejection raises — how is that not just a crash?
+
+**Context:**
+- *Research-agent example:* a human denies the expensive 50-page crawl.
+- *Code:* `Checkpoint.require_approval` does `raise CheckpointRejected(...)`;
+  `Agent.arun` catches it → `ErrorRecord(recovered=False)` + partial RunResult
+  with `metadata["failed"]=True`.
+- *My answer:* the raise is an *internal* signal; the run loop converts it to a
+  first-class outcome. The caller gets `result.output is None`,
+  `result.metadata["failed"]`, and `result.errors[0].reason` — a normal,
+  inspectable result, not an unhandled exception. The user places the gate;
+  AgentArgus owns the denial handling. Same "controlled failure" posture as
+  Module 8's worker failures.
+
+*Your answer:*
+
+### 2. Async-first backend with a sync adapter — why?
+
+**Context:**
+- *Research-agent example:* the approval callback posts to Slack and awaits a
+  human clicking a button minutes later.
+- *Code:* `ApprovalBackend.decide` is async; `CallbackApprovalBackend` awaits a
+  coroutine fn or runs a plain fn via `to_thread`.
+- *My answer:* a real approval waits on network I/O (a human over Slack/UI), which
+  must not block the event loop — so async is the native shape. But many users
+  have a simple sync callback; auto-wrapping it in `to_thread` means they don't
+  have to learn async. Async-first with a sync on-ramp, consistent with the
+  async-core decision from Module 1.
+
+*Your answer:*
+
+### 3. edited_input — why let the human change the agent's action?
+
+**Context:**
+- *Research-agent example:* the agent proposes crawling 50 pages; the reviewer
+  approves but edits it down to 10.
+- *Code:* `Decision.edited_input`; the agent uses it as the next input when set.
+- *My answer:* real HITL is rarely pure yes/no — reviewers correct/redirect. A
+  bare bool forces "reject and restart" for a tweak that approve-with-edit
+  handles in one step. The cost: `edited_input` is trusted (we don't validate the
+  human's redirect) — documented; validation is the agent's job if it matters.
+
+*Your answer:*
+
+### 4. Explicit checkpoint placement vs. auto-gating every tool call
+
+**Context:**
+- *Research-agent example:* you want approval before the *crawl*, not before
+  every `web_search`.
+- *Code:* the agent calls `await checkpoint(context)` exactly at the crawl.
+- *My answer:* auto-gating every tool call would be unusably chatty (approve 40
+  searches?) and would couple HITL to the recorder. Explicit placement gates the
+  one action that matters — precise, opt-in, and the checkpoint is just a call
+  the agent makes where it decides, like `record_tool_call`. Rejected the
+  auto-gate for exactly this.
+
+*Your answer:*
+
+### 5. Pause/resume — how does an hours-long approval not block or lose state?
+
+**Context:**
+- *Research-agent example:* approval sits in a queue for 3 hours; the process
+  restarts in between.
+- *Code:* `require_approval` persists a `pending`/`approved` step via the Module 8
+  `Checkpointer`; `_replay_if_approved` returns a prior approval without
+  re-prompting.
+- *My answer:* two parts — async means awaiting the decision doesn't block other
+  work; the checkpointer means an approval already granted (even before a
+  restart) is replayed from SQLite instead of re-asking. Reuses Module 8's exact
+  durable-resume mechanism; HITL added almost no new persistence code.
+
+*Your answer:*
+
+### 6. Console backend in CI would hang on stdin — how handled?
+
+**Context:**
+- *Research-agent example:* a nightly eval job (no human, no TTY) hits a console
+  checkpoint.
+- *Code:* `ConsoleApprovalBackend.decide` checks `sys.stdin.isatty()`; non-TTY →
+  logs + returns `Decision(approved=False)`.
+- *My answer:* fail-safe, not fail-hang. An unattended context can't approve, so
+  the safe default is reject-with-a-clear-reason rather than block forever on
+  `input()`. Same fail-safe instinct as the cost-ceiling and the circuit breaker
+  — when unsure, stop safely and say why.
+
+*Your answer:*
+
+### 7. What travels in the approval `context`?
+
+**Context:**
+- *Research-agent example:* the reviewer needs to see "50-page crawl, est
+  \$2.50" to decide.
+- *Code:* `require_approval(context)` takes an arbitrary `Mapping`; the agent
+  fills it (proposed action, cost, accumulated state).
+- *My answer:* the agent decides what the human needs to see — the proposed
+  action, its estimated cost/impact, relevant state — passed as a freeform dict.
+  Freeform because what's decision-relevant varies by checkpoint; it's persisted
+  and logged, so it doubles as the audit record of *what* was being approved.
+
+*Your answer:*
+
+### 8. HITL is almost pure composition — what did it actually add?
+
+**Context:**
+- *Research-agent example:* pausing for approval reuses the checkpointer (M8),
+  the recorder (M7), ErrorRecord (M0).
+- *Code:* `hitl/checkpoint.py` imports `record_step`, the `Checkpointer`,
+  `CheckpointRejected`; the only new integration is one `except` in `Agent.arun`.
+- *My answer:* the genuinely new bits are small — the `Decision`/`ApprovalBackend`
+  abstraction and the rejection-as-controlled-failure wiring. Persistence, step
+  recording, and error surfacing all already existed. That HITL slotted in with
+  one catch clause is evidence the earlier seams generalize; a feature that
+  needed new persistence + new error machinery would have signalled otherwise.
+
+*Your answer:*
+
+### 9. Multiple checkpoints in one run — do they collide in storage?
+
+**Context:**
+- *Research-agent example:* a run gates both a "crawl" and a "publish" action —
+  two named checkpoints.
+- *Code:* `_step_key` hashes the checkpoint `name` into a step slot; persistence
+  rows are `worker="checkpoint:<name>"`.
+- *My answer:* each checkpoint persists under its own name, so "crawl" and
+  "publish" occupy distinct slots and replay independently. The hash-based step
+  key is a pragmatic slot within the run's checkpoint table. Honest limitation:
+  two checkpoints with the *same* name in one run would share a slot — documented;
+  name them distinctly.
+
+*Your answer:*
+
+### 10. Is a raised rejection catchable by the reliability layer (retry)?
+
+**Context:**
+- *Research-agent example:* the agent is wrapped in a `ReliabilityPolicy` with
+  retries, and a checkpoint is rejected.
+- *Code:* `CheckpointRejected` is an `AgentArgusError`; retry's default retryable
+  set is transient/network types only.
+- *My answer:* it should NOT be retried — a human said no; re-running and
+  re-asking would be wrong (and annoying). Because `CheckpointRejected` isn't in
+  the retryable set, `RetryWithBackoff` re-raises it immediately, and the Agent's
+  catch turns it into the controlled failure. The retryable-set design (Module 4)
+  pays off here: a deliberate denial isn't mistaken for a transient blip.
+
+*Your answer:*
+
+---
+
 ## Module 8 — Orchestration Patterns (production-grade)
 
 > Context-block format: Deep Research Agent example + code citation + Claude
