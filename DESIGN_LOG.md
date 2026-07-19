@@ -6,6 +6,69 @@ the top.
 
 ---
 
+## Module 3 — Observability: Cost Tracking — 2026-07-19
+
+### 1. What was built
+- **`observability/cost.py`** — `CostTracker` (prices reported usage, keeps a
+  per-step ledger, emits a cost sub-span per entry, enforces a ceiling), plus
+  `Usage` (typed token record) and `CostEntry` (one ledger row).
+- **`_internal/pricing.py`** — private `PriceTable`: `model → (input_per_1m,
+  output_per_1m)`. **User-supplied**, dollars per 1M tokens. No baked-in prices.
+- **`_internal/exceptions.py`** — `CostCeilingExceeded(total, ceiling)`.
+- **`conventions.py`** — `SPAN_LLM_CALL`, `GEN_AI_USAGE_COST_USD`.
+- **`agents/agent.py`** — `arun` attaches the per-step cost ledger to
+  `RunResult.metadata["cost_ledger"]` (duck-typed; NullCostTracker unaffected).
+
+### 2. Why this shape
+- **User provides pricing (per 1M tokens), not a baked-in table.** Provider
+  prices drift; a stale hardcoded number is worse than asking for the truth.
+  This also erases the "unknown/outdated model price" maintenance burden and
+  makes cost honest. Register via constructor dict or `register_model`.
+- **Provider-reported token counts** (the billed-on figures), not a local
+  tokenizer estimate — accurate and dependency-free.
+- **Itemized per-step ledger** (owner request): `CostEntry` rows record *which
+  step*, input/output tokens, and cost; surfaced via `entries`, `table()`, and
+  on `RunResult.metadata`. Aggregate is `total()`.
+- **Every priced call also emits a cost sub-span** (shared tracer) so spend is
+  visible in the trace timeline, not only in the aggregate.
+- **Ceiling raises `CostCeilingExceeded`** the instant a call crosses it — the
+  fail-fast posture set for the ceiling config; Module 4 can catch it.
+- **Unknown model → count tokens, $0 cost, loud WARNING** — never crash a run
+  over a missing price, never silently claim a cost is known.
+
+### 3. Reuse points introduced
+- `PriceTable` — the single home for pricing math (`tokens/1e6 * rate`),
+  private to `observability/` (encapsulation pillar).
+- `CostBreakdown.__add__` (Module 0) reused to sum the ledger in `total()`.
+- The cost span reuses Module 2's tracer seam + `conventions.py` keys.
+
+### 4. methodoverload decision — site #2 (`add_usage`)
+Used, genuinely type-dispatched on the *shape* the caller holds: `dict` /
+`Usage` / `object` (provider response, catch-all, registered last). `cost.py`
+omits `from __future__ import annotations` (the Module 1 finding). Note the
+`dict` overload MUST be annotated as bare `dict`, not `dict[str, Any]` —
+`isinstance(x, dict[str,Any])` raises, so a subscripted generic would break
+dispatch; a scoped `# type: ignore[type-arg]` documents this. `Usage` is a
+frozen dataclass (a distinct class), so it dispatches to its own overload before
+falling through to `object`.
+
+### 5. Failure modes
+- `add_usage(object())` with no readable usage raises `TypeError` naming the
+  type — deliberate, better than recording zero silently.
+- The ceiling check runs *after* recording the entry, so the offending entry is
+  in the ledger when the exception fires (you can see what tripped it). The run
+  is halted mid-flight — a partial ledger, by design.
+- Prices are floats; extreme token counts accumulate normal float error, well
+  within the 5% gate. Verified against a hand-computed fixture.
+
+### 6. The one thing most likely to be asked in review
+"Costs are floats — how accurate is the total, and where does drift come from?"
+Answer: each entry is `tokens/1e6 * rate` in float64; error is far below the 5%
+gate and dominated by whether the *provider's* reported token counts match the
+invoice, not our arithmetic. We price exactly what the provider reports.
+
+---
+
 ## Module 2 — Observability: Tracer — 2026-07-19
 
 ### 1. What was built

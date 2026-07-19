@@ -7,7 +7,12 @@ sites (spec §9 is explicit about this).
 
 from __future__ import annotations
 
-__all__ = ["AgentArgusError", "ConfigError", "SerializationError"]
+__all__ = [
+    "AgentArgusError",
+    "ConfigError",
+    "SerializationError",
+    "CostCeilingExceeded",
+]
 
 
 class AgentArgusError(Exception):
@@ -29,3 +34,21 @@ class SerializationError(AgentArgusError):
     Preferred over a silent lossy fallback (e.g. ``str(obj)``), which would hide
     real data loss from the caller.
     """
+
+
+class CostCeilingExceeded(AgentArgusError):
+    """Raised when accumulated spend crosses the configured cost ceiling.
+
+    Thrown the moment an ``add_usage`` call would push the running total over the
+    limit, so a runaway agent stops spending rather than discovering the overrun
+    after the fact. The reliability layer (Module 4) may catch this as a
+    controlled failure recorded in ``RunResult.errors``.
+    """
+
+    def __init__(self, total_usd: float, ceiling_usd: float) -> None:
+        self.total_usd = total_usd
+        self.ceiling_usd = ceiling_usd
+        super().__init__(
+            f"Cost ceiling exceeded: ${total_usd:.4f} would exceed the "
+            f"${ceiling_usd:.4f} limit. Halting to prevent further spend."
+        )

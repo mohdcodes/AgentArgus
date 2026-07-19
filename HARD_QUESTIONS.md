@@ -6,6 +6,163 @@ gate does not close until the owner can answer its batch in their own words.
 
 ---
 
+## Module 3 — Observability: Cost Tracking
+
+> Context-block format: each question has a Deep Research Agent example, a code
+> citation, and Claude Code's own answer. Read it, then write yours below.
+
+### 1. User-supplied pricing vs. a shipped price table
+
+**Context:**
+- *Research-agent example:* you run the research agent on `claude-opus-4-8`
+  today at $15/$75 per 1M; next month the price changes. With a shipped table,
+  your cost report would silently be wrong until we released an update.
+- *Code:* `PriceTable` (`_internal/pricing.py`) starts empty; prices come from
+  `CostTracker(pricing=...)` or `register_model`.
+- *My answer:* we ship NO prices. The user supplies (model, input/1M, output/1M).
+  Trade-off: slightly more setup for the user, but the number is always the one
+  *they* know is current, and we never maintain a drifting table or guess. This
+  is the same honesty principle as the fail-fast cost ceiling.
+
+*Your answer:*
+
+### 2. add_usage overload — why does Usage not fall into the object branch?
+
+**Context:**
+- *Research-agent example:* the retrieval step hands the tracker a typed
+  `Usage(input_tokens=4000, output_tokens=150)`; the synthesis step hands it a
+  raw Anthropic response object. Both must be priced correctly.
+- *Code:* `CostTracker.add_usage` (`observability/cost.py`) has three
+  `@overload`s: `dict`, `Usage`, `object` — registered in that order.
+- *My answer:* first-match-wins + `Usage` is a distinct class registered *before*
+  `object`, so `isinstance(u, Usage)` matches first and the `object` catch-all
+  only catches provider responses. Verified by `test_overload_sites.py` — all
+  three branches hit their own impl. If `object` were registered first, a
+  `Usage` would wrongly take the catch-all.
+
+*Your answer:*
+
+### 3. The bare-`dict` annotation and the type: ignore
+
+**Context:**
+- *Research-agent example:* the planner passes `{"input_tokens": 1200,
+  "output_tokens": 300}` — a plain dict — and expects it priced.
+- *Code:* the dict overload is annotated `usage: dict` (not `dict[str, Any]`)
+  with a `# type: ignore[type-arg]`.
+- *My answer:* `methodoverload` dispatches via `isinstance(value, annotation)`,
+  and `isinstance(x, dict[str, Any])` raises `TypeError` — subscripted generics
+  aren't valid isinstance targets. So the annotation MUST be bare `dict` for
+  dispatch to work; the `type: ignore` documents that this is deliberate, not
+  laziness. Same family of constraint as the no-`__future__`-annotations rule.
+
+*Your answer:*
+
+### 4. Per-step ledger vs. a single aggregate
+
+**Context:**
+- *Research-agent example:* the run cost $0.21 total, but you need to see that
+  retrieval alone was $0.071 (4000 input tokens) to know where to optimize.
+- *Code:* `CostEntry` rows in `CostTracker._entries`; exposed via `entries`,
+  `table()`, and `RunResult.metadata["cost_ledger"]`. `total()` sums them.
+- *My answer:* the ledger is the source of truth; `total()` is derived by summing
+  entries (reusing `CostBreakdown.__add__`). This gives per-step attribution
+  (which step, how many in/out tokens, cost) AND the aggregate, without storing
+  the total separately (no risk of them drifting out of sync).
+
+*Your answer:*
+
+### 5. Cost span emission — coupling cost to the tracer
+
+**Context:**
+- *Research-agent example:* you open the trace in Jaeger and want each LLM call
+  (planner/retrieval/synthesis) to appear as its own span with token + cost
+  attributes under the `agent.run` span.
+- *Code:* `CostTracker._record` opens `self._tracer.span(SPAN_LLM_CALL, ...)`
+  when a tracer was injected; otherwise it just records to the ledger.
+- *My answer:* the tracer is optional on `CostTracker` — no tracer means ledger
+  only, no spans. When shared with the Agent's tracer, each priced call nests a
+  cost span under `agent.run`. Risk: if the caller gives the tracker a
+  *different* tracer than the Agent, the cost spans land in a different trace —
+  documented; pass the same `Tracer` to both.
+
+*Your answer:*
+
+### 6. Ceiling check timing — before or after recording?
+
+**Context:**
+- *Research-agent example:* the ceiling is $0.15; the synthesis step's usage
+  pushes the total to $0.21. You want to know *which* entry blew the budget.
+- *Code:* `_record` appends the `CostEntry`, THEN calls `_check_ceiling`, which
+  raises `CostCeilingExceeded` if `total() > ceiling`.
+- *My answer:* I record first, then check — so the offending entry is in the
+  ledger when the exception fires and you can see exactly what tripped it. The
+  run halts mid-flight with a partial-but-accurate ledger. Alternative (check
+  first, reject the entry) would hide the tripping call. Trade-off is
+  intentional.
+
+*Your answer:*
+
+### 7. Provider-reported tokens vs. local counting
+
+**Context:**
+- *Research-agent example:* the synthesis LLM call returns
+  `response.usage.output_tokens = 800`. Should we trust that or re-count with a
+  tokenizer?
+- *Code:* `add_usage` reads the provider's counts (dict keys / `Usage` fields /
+  `response.usage.*`); there is no tokenizer in the codebase.
+- *My answer:* trust the provider's counts — they're what you're *billed* on, so
+  they're the accurate basis for cost. A local tokenizer would be an estimate
+  that can diverge from the invoice and would add a dependency. If a provider
+  ever doesn't report usage, that's a future fallback, not a default.
+
+*Your answer:*
+
+### 8. Unknown-model behaviour — warn vs. raise
+
+**Context:**
+- *Research-agent example:* someone runs the agent on `claude-opus-5` (not yet
+  priced) — should the whole run crash, or continue with token counts but $0?
+- *Code:* `PriceTable.price` logs a WARNING and returns a `CostBreakdown` with
+  tokens but zero cost when the model is unregistered.
+- *My answer:* count tokens, $0 cost, loud WARNING. Crashing a long research run
+  over a missing price is worse than continuing with visible-but-unpriced usage;
+  the WARNING (naming the model) makes the gap impossible to miss. We never
+  pretend $0 is the *real* cost — the warning says it's unpriced.
+
+*Your answer:*
+
+### 9. CostBreakdown is immutable — how does the running total accumulate?
+
+**Context:**
+- *Research-agent example:* three steps each produce a `CostBreakdown`; the run's
+  total must be their sum.
+- *Code:* `total()` folds `summed = summed + entry.cost` using
+  `CostBreakdown.__add__` (Module 0), starting from an empty `CostBreakdown`.
+- *My answer:* `CostBreakdown` is a frozen dataclass, so accumulation is
+  functional — each `+` returns a new breakdown, never mutating. `total()`
+  recomputes from the ledger each call rather than caching a mutable running
+  sum, so there's no stale-total bug. Cost: O(n) per `total()` call, negligible
+  for realistic entry counts.
+
+*Your answer:*
+
+### 10. The ledger lives on the tracker, copied to metadata — dual source of truth?
+
+**Context:**
+- *Research-agent example:* after the run you read `result.metadata["cost_ledger"]`
+  — but the live `CostTracker` also still holds `.entries`. Which is canonical?
+- *Code:* `Agent.arun` calls `self._cost.table()` and stores the rows in
+  `RunResult.metadata`; the tracker keeps its own `_entries`.
+- *My answer:* the tracker is canonical during the run; `RunResult.metadata` is
+  an immutable *snapshot* taken at result-assembly time (plain dict rows, frozen
+  into the RunResult's read-only mapping). They can't drift because the snapshot
+  is taken once and the RunResult is immutable. A tracker reused across runs
+  would accumulate — so use one tracker per run (documented).
+
+*Your answer:*
+
+---
+
 ## Module 2 — Observability: Tracer
 
 > **Format note (permanent from this module on).** Every question carries a

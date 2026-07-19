@@ -158,12 +158,20 @@ class Agent(BaseAgent):
                 cost = self._cost.total()
                 _logger.info("agent.run done name=%s cost=$%.4f", self._name, cost.total_cost)
             spans = self._tracer.collect(trace_id)
+            metadata: dict[str, Any] = {"agent_name": self._name}
+            # Surface the per-step cost ledger (which step, how many tokens, cost)
+            # when the tracker keeps one. Duck-typed so NullCostTracker is fine.
+            table = getattr(self._cost, "table", None)
+            if callable(table):
+                rows = table()
+                if rows:
+                    metadata["cost_ledger"] = rows
             return RunResult(
                 output=output,
                 trace_id=trace_id,
                 spans=spans,
                 cost=cost,
-                metadata={"agent_name": self._name},
+                metadata=metadata,
             )
         finally:
             reset_trace_id(token)

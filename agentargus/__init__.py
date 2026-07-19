@@ -11,6 +11,7 @@ from __future__ import annotations
 from agentargus._internal.exceptions import (
     AgentArgusError,
     ConfigError,
+    CostCeilingExceeded,
     SerializationError,
 )
 from agentargus.agents import Agent, BaseAgent
@@ -24,7 +25,7 @@ from agentargus.core import (
     ToolCall,
 )
 from agentargus.logging import configure_logging, get_logger
-from agentargus.observability import Tracer
+from agentargus.observability import CostTracker, Tracer, Usage
 
 __version__ = "0.1.0.dev0"
 
@@ -33,6 +34,8 @@ __all__ = [
     "Agent",
     "BaseAgent",
     "Tracer",
+    "CostTracker",
+    "Usage",
     "RunResult",
     "Span",
     "ToolCall",
@@ -45,6 +48,7 @@ __all__ = [
     "AgentArgusError",
     "ConfigError",
     "SerializationError",
+    "CostCeilingExceeded",
     "get_logger",
     "configure_logging",
 ]
