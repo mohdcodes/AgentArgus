@@ -22,7 +22,7 @@ active, falling back to a uuid4 only when tracing is off (``NullTracer``).
 # site), but kept off for consistency with the rest of observability/.
 
 import time
-from collections import defaultdict
+from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -52,38 +52,79 @@ def _readable_to_span(raw: ReadableSpan) -> Span:
     ctx = raw.get_span_context()
     parent_id = format_span_id(raw.parent.span_id) if raw.parent else None
     span_id = format_span_id(ctx.span_id) if ctx is not None else ""
+    start_ns = raw.start_time or 0
+    end_ns = raw.end_time or 0
     return Span(
         name=raw.name,
         span_id=span_id,
-        start_time=(raw.start_time or 0) / _NS_PER_S,
-        end_time=(raw.end_time or 0) / _NS_PER_S,
+        start_time=start_ns / _NS_PER_S,
+        end_time=end_ns / _NS_PER_S,
         attributes=dict(raw.attributes or {}),
         parent_id=parent_id,
+        # Keep lossless nanoseconds for correct ordering (float seconds collide
+        # for spans <~1µs apart). See Span.sort_key / HARD_QUESTIONS #5.
+        start_ns=start_ns,
+        end_ns=end_ns,
     )
 
 
 class CollectorProcessor(SpanProcessor):
     """A span processor that buffers finished spans keyed by trace id.
 
-    This is how spans get onto ``RunResult.spans`` without disabling export:
-    it runs alongside the real exporter's processor. Buffers are drained (and
-    cleared) per run to bound memory.
+    This is how spans get onto ``RunResult.spans`` without disabling export: it
+    runs alongside the real exporter's processor. ``Agent.arun`` drains each
+    run's buffer after the run, so under normal use nothing accumulates.
+
+    Uncollected traces (e.g. a caller who uses ``Tracer.span`` directly and never
+    calls ``collect``) are guarded against silent unbounded growth
+    (HARD_QUESTIONS #2): once ``warn_after`` uncollected traces pile up we log a
+    WARNING, and at ``max_traces`` we evict the OLDEST uncollected trace (LRU)
+    and log exactly what was dropped — data loss is never silent.
     """
 
-    def __init__(self) -> None:
-        self._by_trace: dict[str, list[Span]] = defaultdict(list)
+    def __init__(self, warn_after: int = 3, max_traces: int = 1000) -> None:
+        # OrderedDict gives LRU semantics: newest inserted last, oldest first.
+        self._by_trace: OrderedDict[str, list[Span]] = OrderedDict()
+        self._warn_after = warn_after
+        self._max_traces = max_traces
+        self._warned = False
 
     def on_end(self, span: ReadableSpan) -> None:
         ctx = span.get_span_context()
         if ctx is None:  # pragma: no cover - defensive
             return
         trace_hex = format_trace_id(ctx.trace_id)
+        self._by_trace.setdefault(trace_hex, [])
         self._by_trace[trace_hex].append(_readable_to_span(span))
+        self._by_trace.move_to_end(trace_hex)  # mark most-recently-touched
+        self._guard_growth()
+
+    def _guard_growth(self) -> None:
+        uncollected = len(self._by_trace)
+        if uncollected > self._warn_after and not self._warned:
+            self._warned = True
+            _logger.warning(
+                "CollectorProcessor holds %d uncollected traces; are you using "
+                "Tracer.span() without collect()? Buffers free on collect().",
+                uncollected,
+            )
+        while len(self._by_trace) > self._max_traces:
+            evicted_id, evicted_spans = self._by_trace.popitem(last=False)  # oldest
+            _logger.error(
+                "CollectorProcessor evicted oldest uncollected trace %s (%d spans) "
+                "at cap=%d. These spans were NOT returned to any RunResult.",
+                evicted_id,
+                len(evicted_spans),
+                self._max_traces,
+            )
 
     def drain(self, trace_id: str) -> tuple[Span, ...]:
         """Return and remove all spans collected for ``trace_id`` (start-ordered)."""
         spans = self._by_trace.pop(trace_id, [])
-        spans.sort(key=lambda s: s.start_time)
+        # Sort by lossless nanosecond key so sub-microsecond siblings keep order.
+        spans.sort(key=lambda s: s.sort_key)
+        if not self._by_trace:
+            self._warned = False  # reset once drained back to empty
         return tuple(spans)
 
     # SpanProcessor requires these; we have nothing to flush/shutdown.

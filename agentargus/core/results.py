@@ -70,7 +70,17 @@ def _jsonable(value: Any, *, field_name: str) -> Any:
 
 @dataclass(frozen=True, slots=True)
 class Span:
-    """A single structured execution step, emitted by the tracer (spec §2)."""
+    """A single structured execution step, emitted by the tracer (spec §2).
+
+    ``start_time`` / ``end_time`` are float **seconds** for display and the
+    public API. But float64 cannot hold epoch-**nanosecond** precision (~19
+    significant digits vs float's ~16), so two spans less than ~1µs apart would
+    collapse to the same float — and anything ordering by start time (timeline
+    reconstruction, sibling ordering) would see a tie. ``start_ns`` / ``end_ns``
+    keep the lossless integer nanoseconds when the source provides them; sort by
+    ``sort_key`` (ns when available, else float seconds) to preserve true order.
+    (HARD_QUESTIONS Module 2 #5.)
+    """
 
     name: str
     span_id: str
@@ -78,6 +88,8 @@ class Span:
     end_time: float
     attributes: Mapping[str, Any] = field(default_factory=dict)
     parent_id: str | None = None
+    start_ns: int | None = None
+    end_ns: int | None = None
 
     def __post_init__(self) -> None:
         # Freeze the mapping so ``span.attributes["x"] = ...`` raises.
@@ -86,6 +98,11 @@ class Span:
     @property
     def duration(self) -> float:
         return self.end_time - self.start_time
+
+    @property
+    def sort_key(self) -> int | float:
+        """Lossless ordering key: nanoseconds if known, else float seconds."""
+        return self.start_ns if self.start_ns is not None else self.start_time
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +223,8 @@ class RunResult:
                     "end_time": s.end_time,
                     "attributes": dict(s.attributes),
                     "parent_id": s.parent_id,
+                    "start_ns": s.start_ns,
+                    "end_ns": s.end_ns,
                 }
                 for s in self.spans
             ],

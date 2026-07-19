@@ -68,6 +68,24 @@ that double work per span?" Answer: yes, one extra in-memory append per span,
 which is negligible next to export I/O, and it's the price of getting
 `RunResult.spans` without disabling export. The collector does no I/O.
 
+### 7. Post-review fixes (from the Module 2 HARD_QUESTIONS pass)
+The owner's review surfaced three issues; all fixed before closing the gate:
+- **uuid4 trace-id window (Q3) — CLOSED.** The DEBUG "agent.run start" line was
+  being emitted under the uuid4 fallback *before* the span opened (verified
+  empirically). `arun` now opens the span, adopts the OTel id, and binds the
+  contextvar *before* the first log line. Test: `test_no_uuid4_window_with_tracer`.
+- **float-seconds collision (Q5) — FIXED.** Verified that two spans <~1µs apart
+  collapse to the same float `start_time`. Added lossless `start_ns`/`end_ns`
+  to `Span` and a `sort_key`; `CollectorProcessor.drain` orders by ns.
+- **unbounded collector buffer (Q2) — GUARDED.** `CollectorProcessor` now warns
+  after 3 uncollected traces and LRU-evicts the oldest at a 1000-trace cap, with
+  an ERROR log naming exactly what was dropped (no silent data loss).
+
+### 8. Process change (permanent, from this module forward)
+HARD_QUESTIONS now carry a **Context block** per question: a Deep Research Agent
+example, a real code citation, and Claude Code's own implementer answer for the
+owner to check against. Recorded so every future module follows suit.
+
 ---
 
 ## Module 1 — Agents (`BaseAgent`, `Agent` facade) — 2026-07-19

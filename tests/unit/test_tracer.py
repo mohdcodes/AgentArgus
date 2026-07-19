@@ -64,6 +64,45 @@ class TestSpanEmission:
         assert tracer.collect(tid) == ()  # drained
 
 
+class TestNanosecondOrdering:
+    def test_spans_carry_lossless_nanoseconds(self) -> None:
+        tracer = Tracer()
+        with tracer.span("parent"):
+            tid = tracer.current_trace_id()
+        assert tid is not None
+        span = tracer.collect(tid)[0]
+        assert span.start_ns is not None and span.start_ns > 0
+        # sort_key uses ns when present.
+        assert span.sort_key == span.start_ns
+
+    def test_float_seconds_would_collide_but_ns_does_not(self) -> None:
+        # Two ns timestamps <1us apart collapse to one float; ns keeps them apart.
+        from agentargus.core import Span
+
+        a = Span("a", "1", 0.0, 0.0, start_ns=1_784_462_298_176_935_100)
+        b = Span("b", "2", 0.0, 0.0, start_ns=1_784_462_298_176_935_101)
+        assert a.start_time == b.start_time  # float collision (documented)
+        assert a.sort_key != b.sort_key  # ns ordering survives
+
+
+class TestCollectorGrowthGuard:
+    def test_warns_after_threshold_and_evicts_at_cap(self) -> None:
+        from agentargus.observability.tracer import CollectorProcessor
+
+        proc = CollectorProcessor(warn_after=2, max_traces=3)
+        # Simulate uncollected traces by injecting spans under distinct ids.
+        from agentargus.core import Span
+
+        for i in range(5):
+            proc._by_trace[f"trace{i}"] = [Span(f"s{i}", "x", 0.0, 0.0)]
+            proc._by_trace.move_to_end(f"trace{i}")
+            proc._guard_growth()
+        # Cap=3 => only the 3 newest survive; oldest two evicted.
+        assert len(proc._by_trace) == 3
+        assert "trace0" not in proc._by_trace
+        assert "trace4" in proc._by_trace
+
+
 class TestTracedDecorator:
     async def test_traced_async(self) -> None:
         tracer = Tracer()

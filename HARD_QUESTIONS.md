@@ -8,49 +8,185 @@ gate does not close until the owner can answer its batch in their own words.
 
 ## Module 2 — Observability: Tracer
 
-1. You register two `SpanProcessor`s — the exporter's and your `CollectorProcessor`.
-   Walk through what happens to a single span from `on_end` to landing in
-   `RunResult.spans`. What's the per-span overhead, and why is it acceptable?
+> **Format note (permanent from this module on).** Every question carries a
+> **Context** block: a Deep Research Agent example (planner → retrieval →
+> synthesis → evaluator), a real code citation, and Claude Code's own
+> implementer answer. Read the Context, then write YOUR answer below it and
+> check it against mine.
 
-2. `CollectorProcessor` buffers spans in a dict keyed by trace id and only frees
-   a buffer on `collect()`. Describe a usage pattern that leaks memory. What
-   guarantees `Agent.arun` doesn't leak, and what would you add to protect the
-   direct-`Tracer`-use case?
+### 1. Two span processors — the per-span path and its cost
 
-3. The OTel trace id is now the source of truth, replacing Module 1's uuid4.
-   What exactly happens to `RunResult.trace_id` and to the log-correlation
-   contextvar at the moment the span opens? Trace the ordering — is there a
-   window where a log line carries the uuid4 instead of the OTel id?
+**Context:**
+- *Research-agent example:* the research `Agent` runs; its `agent.run` span
+  ends. That one span must both (a) ship to Jaeger so you can open the trace in
+  the UI, and (b) appear in `RunResult.spans` so the evaluator can later read
+  `PlanCoherence` off the step tree.
+- *Code:* `Tracer.__init__` (`observability/tracer.py`) adds two processors —
+  `SimpleSpanProcessor(self._exporter)` and `self._collector`
+  (`CollectorProcessor`). On span end, both `on_end`s fire.
+- *My answer:* each span triggers one export (I/O) via the exporter's processor
+  and one in-memory `list.append` via the collector. The overhead of the
+  collector is a dict lookup + append + `move_to_end` — microseconds, no I/O —
+  negligible beside the export. It's acceptable because it's the only way to get
+  `RunResult.spans` populated *without* turning off export; the two consumers
+  (Jaeger, RunResult) are served from one span end.
 
-4. `SimpleSpanProcessor` exports synchronously on the calling thread. For a
-   high-throughput production agent, what's the consequence, and when would you
-   switch to `BatchSpanProcessor`? What do you lose by batching?
+*Your answer:*
 
-5. You convert OTel nanosecond timestamps to float seconds. What precision do
-   you lose, and could two spans ever get the same `start_time` after
-   conversion? Does anything in the system depend on them being distinct?
+### 2. CollectorProcessor buffer — leak risk and the guard
 
-6. The tracer depends on OTel's `SpanExporter` *interface*, not a concrete
-   backend (the abstraction pillar). Name a second exporter you could drop in
-   with zero changes to `Tracer`, and one you couldn't — why?
+**Context:**
+- *Research-agent example:* someone instruments retrieval directly with
+  `tracer.span("retrieval")` in a loop over 10k documents but never calls
+  `collect()` — those span buffers would pile up under their trace ids.
+- *Code:* `CollectorProcessor` (`observability/tracer.py`) — `_by_trace` is an
+  `OrderedDict`; `_guard_growth` warns after `warn_after=3` uncollected traces
+  and LRU-evicts (with an ERROR log naming the trace) at `max_traces=1000`.
+  `Agent.arun` always calls `self._tracer.collect(trace_id)`, so normal use
+  frees each buffer.
+- *My answer:* the leak pattern is direct `Tracer.span` use with no `collect`.
+  `Agent.arun` can't leak because it drains every run. For the direct-use case I
+  added the warn-then-LRU-evict guard so growth is bounded and any drop is
+  logged loudly — data loss is never silent (your review directive).
 
-7. `current_trace_id()` reads `get_current_span()`. In an async run with multiple
-   concurrent agent tasks, does each task see its own current span, or could
-   they cross-contaminate? Justify via OTel's context propagation + contextvars.
+*Your answer:*
 
-8. Nested spans nest via OTel's context (child's `parent_id` = parent's
-   `span_id`). But when an `Agent` wraps another `Agent`, each has its own
-   `Tracer` with its own provider — so the inner spans are in a *different*
-   trace. Is that right, or should they share one trace? Argue it.
+### 3. OTel trace id as source of truth — is there a uuid4 window?
 
-9. `Tracer.__init__` builds a fresh `TracerProvider` per instance rather than
-   using the global OTel provider. Why? What breaks if two `Tracer`s fought over
-   the global provider, and what do you give up by not using it?
+**Context:**
+- *Research-agent example:* the planner logs "decomposing query into 3
+  sub-questions" at DEBUG. That log line must carry the SAME trace id that shows
+  up in Jaeger, or you can't jump from log to trace.
+- *Code:* `Agent.arun` (`agents/agent.py`) now opens the span FIRST, reads
+  `otel_id = self._tracer.current_trace_id()`, calls `set_trace_id(trace_id)`,
+  and only THEN emits the first `_logger.debug("agent.run start")`.
+- *My answer:* **there WAS a window and I closed it in this review.** Originally
+  the DEBUG "start" line was emitted under the uuid4 before the span opened —
+  verified empirically (it logged `0c3a0a1a…` while the run's real id was
+  `51c4da26…`). After the fix, every `agent.run` log line carries the OTel id;
+  a test (`test_no_uuid4_window_with_tracer`) locks it in. uuid4 is used only
+  when there's no tracer (`NullTracer.current_trace_id()` → None).
 
-10. Your `[otlp]` extra is optional and `_make_exporter` raises a friendly
-    ImportError if it's missing. Is deferring that import to call-time the right
-    call versus importing at module top? What's the trade-off for startup and
-    for discoverability of the dependency?
+*Your answer:*
+
+### 4. SimpleSpanProcessor is synchronous — production consequence
+
+**Context:**
+- *Research-agent example:* the synthesis step fans out 20 concurrent LLM calls,
+  each a span. With `SimpleSpanProcessor`, each span end blocks on export I/O
+  before returning.
+- *Code:* `Tracer.__init__` uses `SimpleSpanProcessor(self._exporter)`.
+- *My answer:* synchronous export adds latency on the hot path proportional to
+  export round-trips — fine for tests/dev, bad under load. `BatchSpanProcessor`
+  buffers and flushes on a background thread, removing that latency. What you
+  lose: spans buffered-but-unflushed at a crash are gone unless you add a
+  durability/checkpoint layer (your review point). Deferred to a production-
+  hardening pass; documented in DESIGN_LOG §5.
+
+*Your answer:*
+
+### 5. Nanosecond → float seconds: precision and collisions
+
+**Context:**
+- *Research-agent example:* the planner emits two child spans ("parse intent",
+  "plan steps") 200 ns apart. If both collapse to the same `start_time`, a
+  timeline view can't tell which came first.
+- *Code:* `Span` (`core/results.py`) now keeps `start_ns`/`end_ns` (lossless
+  ints) alongside float `start_time`; `Span.sort_key` prefers ns.
+  `CollectorProcessor.drain` sorts by `sort_key`.
+- *My answer:* **collision is real and I verified it:** float64 holds ~16 sig
+  digits, epoch-ns needs ~19, so two spans <~1µs apart get the *same* float
+  (confirmed: 1 ns and even 100 ns apart both collided). Since `drain` orders by
+  start time, that would scramble sibling order. Fix: keep integer nanoseconds
+  internally (`sort_key`), convert to float only for display/API. A test asserts
+  the float collides while `sort_key` does not.
+
+*Your answer:*
+
+### 6. Prove the SpanExporter abstraction is real
+
+**Context:**
+- *Research-agent example:* you want to switch the research agent's traces from
+  local console output to a Zipkin backend without touching `Tracer`.
+- *Code:* `_make_exporter` (`observability/tracer.py`) returns any
+  `SpanExporter`; `Tracer` only depends on that interface.
+- *My answer:* **compatible drop-in:** `ConsoleSpanExporter`, `InMemorySpanExporter`,
+  a Zipkin exporter — all implement `SpanExporter.export(spans)` fire-and-forget,
+  zero `Tracer` changes. **Incompatible:** anything demanding a *synchronous
+  request/response per span* (a "confirm each span was stored before continuing"
+  API) — our `SimpleSpanProcessor`/`BatchSpanProcessor` model is fire-and-export,
+  not request/reply, so such a backend wouldn't fit without a different processor.
+
+*Your answer:*
+
+### 7. Concurrent runs — does current_trace_id cross-contaminate?
+
+**Context:**
+- *Research-agent example:* one process serves query A and query B at the same
+  time (two `arun` tasks on one event loop). A's retrieval span must never be
+  attributed to B's trace.
+- *Code:* `Tracer.current_trace_id()` reads
+  `opentelemetry.trace.get_current_span()`, which resolves through OTel context
+  (contextvar-backed).
+- *My answer:* no cross-contamination. OTel's context is contextvar-based, and
+  `asyncio.create_task` snapshots contextvars per task (same mechanism as our
+  own `trace_id` var, HARD_QUESTIONS Module 1 #10). So A and B each see their own
+  current span. Two *unrelated* runs → two independent trace ids; within one
+  run, parent/child link via `parent_id` under one trace id — two different
+  mechanisms, not conflated (your review point).
+
+*Your answer:*
+
+### 8. Nested Agents → separate traces: right or wrong?
+
+**Context:**
+- *Research-agent example:* a supervisor research `Agent` delegates to a
+  retrieval sub-`Agent`. Today the sub-agent's spans land in a *different* trace
+  than the supervisor's.
+- *Code:* each `Agent` is constructed with its own `Tracer` (→ own
+  `TracerProvider`); `arun` collects only its own trace's spans.
+- *My answer:* it's a defensible v0.1.0 choice: each Agent's run is an
+  independent trace with its own id (`trace_id` + `span_id` + `parent_id` forms
+  the tree *within* a run). A single unified cross-agent trace would need a
+  shared provider / explicit context propagation — a deliberate future feature,
+  not required now. The two ids are different-purpose, never merged (your review
+  point). Trade-off documented.
+
+*Your answer:*
+
+### 9. Fresh TracerProvider per Tracer, not the global one
+
+**Context:**
+- *Research-agent example:* your test suite spins up many `Tracer()`s across
+  parallel tests; none must leak spans into another's buffer, and the research
+  demo's tracer must not clobber a host app's global OTel setup.
+- *Code:* `Tracer.__init__` does `self._provider = TracerProvider()` (a fresh
+  instance), never `trace.set_tracer_provider(...)`.
+- *My answer:* isolation. A per-instance provider means two `Tracer`s (nested
+  agents, parallel tests) never fight over shared global state. **Correction from
+  an earlier wrong instinct:** multiple `Tracer()`s per process are explicitly
+  ALLOWED and by design. Trade-off to document: we lose interop with OTel
+  auto-instrumentation that discovers spans via the *global* provider — those
+  tools won't see AgentArgus's spans. We do NOT restrict to one Tracer/process.
+
+*Your answer:*
+
+### 10. Deferred [otlp] import — right call?
+
+**Context:**
+- *Research-agent example:* a user runs the research demo with the default
+  memory/console exporter and never installs `[otlp]`; importing `agentargus`
+  must not fail for want of an OTLP package they don't use.
+- *Code:* `_make_exporter` imports `OTLPSpanExporter` *inside* the `kind ==
+  "otlp"` branch and raises an `ImportError` naming `pip install
+  'agentargus[otlp]'` if it's absent.
+- *My answer:* deferring to call-time is right — base install and `import
+  agentargus` stay light, and only someone who actually selects `otlp` pays. The
+  discoverability cost (failure at call-time, not import-time) is minimized by an
+  excellent error message that names the exact install command (your review
+  directive).
+
+*Your answer:*
 
 ---
 

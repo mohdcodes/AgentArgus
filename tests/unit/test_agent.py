@@ -142,6 +142,22 @@ class TestTraceCorrelation:
         inside = [ln for ln in lines if ln["message"] == "inside run"]
         assert inside and inside[0]["trace_id"] == result.trace_id
 
+    def test_no_uuid4_window_with_tracer(self) -> None:
+        # HARD_QUESTIONS Module 2 #3: with a real Tracer, EVERY agent.run log
+        # line carries the OTel trace id — no line shows a throwaway uuid4.
+        from agentargus.observability import Tracer
+
+        stream = io.StringIO()
+        configure_logging(level="DEBUG", color=False, json_format=True, stream=stream)
+        result = Agent(lambda x: x, tracer=Tracer(), name="w").run("x")
+        run_lines = [
+            json.loads(ln)
+            for ln in stream.getvalue().strip().splitlines()
+            if ln and "agent.run" in ln
+        ]
+        assert run_lines  # sanity
+        assert all(ln["trace_id"] == result.trace_id for ln in run_lines)
+
 
 class TestSyncLoopGuard:
     async def test_run_inside_running_loop_raises(self) -> None:

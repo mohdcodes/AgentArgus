@@ -139,33 +139,25 @@ class Agent(BaseAgent):
     # Orchestration — written in final shape; seams are null objects for now
     # ------------------------------------------------------------------ #
     async def arun(self, input: Any) -> RunResult:
-        # Trace model: exactly ONE trace_id per arun() call — including a nested
-        # inner agent's own arun(). When agents nest, trace_ids NEST rather than
-        # compete: the inner call's set_trace_id shadows the outer's for its
-        # duration, and reset_trace_id (via the contextvar token) restores the
-        # outer's afterward. So logs emitted during the inner run carry the inner
-        # id; logs during the outer run carry the outer id. Module 2's OTel
-        # Tracer formalises this as a parent/child span tree; today they are
-        # independent-but-nested ids, never merged.
-        # Placeholder id used only for log correlation until we learn the real
-        # OTel trace id inside the span (the tracer's id is the source of truth
-        # when tracing is active; NullTracer returns None so this uuid4 stands).
-        fallback_id = _new_trace_id()
-        token = set_trace_id(fallback_id)
+        # Trace model: exactly ONE trace_id per arun() call. When Agents nest,
+        # trace_ids NEST (contextvar token stacking), they do not merge. The OTel
+        # trace id is the single source of truth: we open the span FIRST, adopt
+        # its id into the log-correlation contextvar, and only THEN emit any log
+        # line — so no log line ever carries a throwaway id (HARD_QUESTIONS #3).
+        # The uuid4 fallback is used only when no tracer is active
+        # (NullTracer.current_trace_id() -> None).
+        token = set_trace_id(None)
         spans: tuple[Any, ...] = ()
         try:
-            _logger.debug("agent.run start name=%s", self._name)
             with self._tracer.span(SPAN_AGENT_RUN, **{GEN_AI_OPERATION_NAME: OP_INVOKE_AGENT}):
-                # Adopt the real trace id as soon as the span is open so that
-                # logs emitted during the run correlate to the OTel trace.
                 otel_id = self._tracer.current_trace_id()
-                if otel_id is not None:
-                    set_trace_id(otel_id)
+                trace_id = otel_id or _new_trace_id()
+                set_trace_id(trace_id)  # bind BEFORE the first log line
+                _logger.debug("agent.run start name=%s", self._name)
                 output = await self._reliability(self._call_inner, input)
                 cost = self._cost.total()
-            trace_id = otel_id or fallback_id
+                _logger.info("agent.run done name=%s cost=$%.4f", self._name, cost.total_cost)
             spans = self._tracer.collect(trace_id)
-            _logger.info("agent.run done name=%s cost=$%.4f", self._name, cost.total_cost)
             return RunResult(
                 output=output,
                 trace_id=trace_id,
