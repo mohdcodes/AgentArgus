@@ -13,6 +13,7 @@ from agentargus._internal.exceptions import (
     ConfigError,
     SerializationError,
 )
+from agentargus.agents import Agent, BaseAgent
 from agentargus.config import AgentArgusConfig, Judge, batch_complete
 from agentargus.core import (
     CostBreakdown,
@@ -28,6 +29,8 @@ __version__ = "0.1.0.dev0"
 
 __all__ = [
     "__version__",
+    "Agent",
+    "BaseAgent",
     "RunResult",
     "Span",
     "ToolCall",

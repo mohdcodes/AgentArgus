@@ -23,10 +23,16 @@ import logging
 import os
 import sys
 import threading
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Any
 
-__all__ = ["get_logger", "configure_logging", "set_trace_id", "get_trace_id"]
+__all__ = [
+    "get_logger",
+    "configure_logging",
+    "set_trace_id",
+    "get_trace_id",
+    "reset_trace_id",
+]
 
 # --------------------------------------------------------------------------- #
 # Trace correlation via contextvars
@@ -34,9 +40,14 @@ __all__ = ["get_logger", "configure_logging", "set_trace_id", "get_trace_id"]
 _trace_id_var: ContextVar[str | None] = ContextVar("agentargus_trace_id", default=None)
 
 
-def set_trace_id(trace_id: str | None) -> object:
+def set_trace_id(trace_id: str | None) -> Token[str | None]:
     """Bind ``trace_id`` for the current context; return a reset token."""
     return _trace_id_var.set(trace_id)
+
+
+def reset_trace_id(token: Token[str | None]) -> None:
+    """Restore the trace_id to what it was before the matching ``set_trace_id``."""
+    _trace_id_var.reset(token)
 
 
 def get_trace_id() -> str | None:

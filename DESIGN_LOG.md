@@ -6,6 +6,78 @@ the top.
 
 ---
 
+## Module 1 — Agents (`BaseAgent`, `Agent` facade) — 2026-07-19
+
+### 1. What was built
+- **`agents/base.py`** — `BaseAgent(ABC)`: abstract `arun(input) -> RunResult`
+  (the real contract) and a concrete `run()` that drives `arun` via
+  `asyncio.run`, refusing (with a clear error) to run inside an existing loop.
+- **`agents/agent.py`** — `Agent(BaseAgent)`, the facade. Normalises any inner
+  target into one async callable; orchestrates a run in its final shape; hosts
+  the `wrap` overload (site #3).
+- **`agents/seams.py`** — null-object seams (`NullTracer`, `NullCostTracker`,
+  `PassthroughReliability`) plus their `Protocol` contracts (`TracerSeam`,
+  `CostSeam`, `ReliabilitySeam`).
+- **`observability/conventions.py`** — GenAI semantic-convention keys, single
+  source of truth (needed one key now; Module 2 extends it).
+- **`logging.py`** — added `reset_trace_id(token)` (proper contextvar restore).
+
+### 2. Why this shape
+- **Async-core, sync-wraps.** All orchestration lives in `arun`; `run` just
+  drives it. This is the biggest reuse decision in the project — reliability,
+  tracing, cost, HITL are written once on the async path and sync borrows them.
+  Cost: `run()` inside a running loop is a controlled error, not a nested loop.
+- **Composition, not inheritance, for collaborators.** `Agent` *has* a tracer /
+  cost / reliability; it is not one. Injected as null objects now.
+- **Null-object seams over `if x is not None`.** `Agent.arun` is written in its
+  FINAL shape today; Modules 2/3/4/9 swap real objects in with zero edits to
+  `Agent`. The null classes double as the documented contract each real
+  collaborator must satisfy.
+- **Sync callables run via `asyncio.to_thread`** so a blocking user function
+  never stalls the event loop; async callables are awaited directly.
+
+### 3. Reuse points introduced
+- `reset_trace_id` in `logging.py` — the sanctioned contextvar restore; `Agent`
+  is its first consumer.
+- `observability/conventions.py` — every future span-attribute write imports its
+  key from here (no scattered string literals).
+- The seam `Protocol`s — the single contract later collaborators implement.
+
+### 4. methodoverload decision — site #3 (`Agent.wrap`)
+Used, and it genuinely dispatches. Two hard-won findings, both now in
+`docs/concepts/methodoverload.md`:
+- **`from __future__ import annotations` breaks dispatch.** PEP 563 stringizes
+  annotations; the library does `isinstance(value, annotation)` at runtime, and
+  `isinstance(x, "BaseAgent")` raises. `agent.py` therefore omits the future
+  import. **This constrains every future overload site** (cost, dataset,
+  metrics) to do the same.
+- **A plain method overwrites an `@overload`.** The library only merges
+  `@overload`-decorated siblings. So the callable "fallback" is itself an
+  `@overload` dispatching on `object` (matches anything), registered *after* the
+  `BaseAgent` overload — first-match-wins routes `BaseAgent` to its branch and
+  everything else to the catch-all. This is the honest resolution of spec
+  §4.3's callable caution: dispatch really happens, on `object` not a fictional
+  `Callable`. mypy can't model this runtime pattern, so the second def carries a
+  scoped `# type: ignore[no-redef]` with an explanatory comment.
+
+### 5. Failure modes
+- `run()` inside a running event loop raises rather than deadlocking — correct
+  for a library, but a caller who doesn't read the message may be surprised.
+- Sync callables run in a worker thread, so they do **not** see the `trace_id`
+  contextvar (contextvars don't cross into raw threads without `copy_context`).
+  Documented; async callables see it correctly. If trace correlation inside sync
+  inner functions ever matters, we'll propagate the context explicitly.
+- The generated `trace_id` (uuid4) is a placeholder until the real Tracer
+  (Module 2) supplies the span's trace id; the seam is designed for a clean swap.
+
+### 6. The one thing most likely to be asked in review
+"You run sync callables in a thread — so your trace_id contextvar silently
+doesn't reach them. Isn't that a correlation hole?" Answer: yes for sync inner
+functions, by design (async is the primary path); the fix (`copy_context`) is
+known and cheap, deferred until a real need appears.
+
+---
+
 ## Module 0 — Core (`RunResult`, config, logging, scaffold) — 2026-07-19
 
 ### 1. What was built

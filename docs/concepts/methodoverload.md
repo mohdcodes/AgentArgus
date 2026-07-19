@@ -84,6 +84,31 @@ correctly. `classmethod`/`staticmethod` are supported by placing `@overload`
 6. **Caching:** `OverloadedFunction` memoises resolutions by `(name, args,
    kwargs)`. Fine for our sites; be wary in hot inner loops (spec §4 "measure").
 
+## ⚠️ Critical gotcha: `from __future__ import annotations` breaks dispatch
+
+Dispatch does `isinstance(value, param.annotation)` on the **raw** annotation.
+`from __future__ import annotations` (PEP 563) turns every annotation into a
+**string** (`"BaseAgent"` instead of the class), and `isinstance(x, "BaseAgent")`
+raises `TypeError: isinstance() arg 2 must be a type`. `methodoverload` does not
+resolve stringized annotations.
+
+**Rule:** any module containing an `@overload` site must **omit** `from
+__future__ import annotations`, and the overloaded parameters must carry real
+(non-stringized) type annotations. Discovered in Module 1 (`agent.py` drops the
+future import for exactly this reason). Verified empirically. This applies to
+every planned site: `cost.py` (#2), `dataset.py` (#1), `metrics/base.py` (#4).
+
+## Second gotcha: a plain method OVERWRITES an `@overload`
+
+The library only merges siblings that are **both** `@overload`-decorated (it
+finds them via frame inspection of the class namespace). If you write one
+`@overload def wrap` followed by a plain `def wrap`, the plain one simply rebinds
+the name and the overload is lost — silently. So a "catch-all fallback" must
+itself be `@overload`-decorated. Because arbitrary callables have no distinct
+`isinstance` class, the catch-all dispatches on **`object`** (which matches
+anything) and is registered **after** the specific overload, so first-match-wins
+routes correctly. Verified in Module 1's `Agent.wrap`.
+
 ## Where AgentArgus uses it (and why it fits)
 
 | Site | Method | Dispatch types | Why overload beats an `isinstance` ladder |
