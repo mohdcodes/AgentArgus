@@ -92,6 +92,27 @@ class TestFactory:
     def test_root(self) -> None:
         assert get_logger().name == "agentargus"
 
+    def test_concurrent_configure_never_half_configured(self) -> None:
+        # #5: lock + atomic swap => the handler list is never observed empty.
+        import threading
+
+        stream = io.StringIO()
+        errors: list[str] = []
+
+        def worker() -> None:
+            for _ in range(50):
+                configure_logging(level="INFO", color=False, stream=stream)
+                handlers = logging.getLogger("agentargus").handlers
+                if len(handlers) != 1:
+                    errors.append(f"saw {len(handlers)} handlers")
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+
     def test_levels_emit(self) -> None:
         stream = io.StringIO()
         configure_logging(level="WARNING", color=False, stream=stream)

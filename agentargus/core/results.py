@@ -16,10 +16,13 @@ Design posture (decided in the Module 0 discussion, recorded in DESIGN_LOG):
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any
+
+from agentargus._internal.exceptions import SerializationError
 
 __all__ = [
     "Span",
@@ -34,6 +37,35 @@ __all__ = [
 def _freeze_mapping(m: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return a read-only view of a mapping so dict fields cannot be mutated."""
     return MappingProxyType(dict(m))
+
+
+def _jsonable(value: Any, *, field_name: str) -> Any:
+    """Coerce an arbitrary value into a JSON-serializable form, or fail loudly.
+
+    Strategy (HARD_QUESTIONS #7): try plain JSON first; if that fails, honour a
+    ``.to_dict()`` method if the object defines one; otherwise raise a
+    ``SerializationError`` naming the exact field and type. A silent lossy
+    fallback (e.g. ``str(value)``) is deliberately rejected — it would hide real
+    data loss from the caller.
+    """
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        pass
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        candidate = to_dict()
+        try:
+            json.dumps(candidate)
+            return candidate
+        except (TypeError, ValueError):
+            pass
+    raise SerializationError(
+        f"Field {field_name!r} holds a value of type "
+        f"{type(value).__name__!r} that is not JSON-serializable and has no "
+        f"usable .to_dict(). Convert it before building the RunResult."
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +196,7 @@ class RunResult:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (JSON-friendly). Round-trips via from_dict."""
         return {
-            "output": self.output,
+            "output": _jsonable(self.output, field_name="output"),
             "trace_id": self.trace_id,
             "spans": [
                 {
@@ -187,12 +219,12 @@ class RunResult:
                 {
                     "name": t.name,
                     "args": dict(t.args),
-                    "result": t.result,
+                    "result": _jsonable(t.result, field_name=f"tool_calls[{i}].result"),
                     "success": t.success,
                     "latency": t.latency,
                     "error": t.error,
                 }
-                for t in self.tool_calls
+                for i, t in enumerate(self.tool_calls)
             ],
             "steps": [
                 {

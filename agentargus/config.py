@@ -11,7 +11,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-__all__ = ["AgentArgusConfig", "Judge"]
+from agentargus._internal.exceptions import ConfigError
+
+__all__ = ["AgentArgusConfig", "Judge", "batch_complete"]
 
 
 @runtime_checkable
@@ -25,8 +27,34 @@ class Judge(Protocol):
     """
 
     def complete(self, prompt: str) -> str:
-        """Return the model's text completion for ``prompt``."""
+        """Return the model's text completion for ``prompt``.
+
+        This is the ONLY required member. An adapter may *optionally* also define
+        ``complete_batch(prompts: list[str]) -> list[str]`` to parallelize large
+        eval datasets — but it is intentionally NOT part of this protocol, so
+        that a minimal ``complete``-only adapter still satisfies ``isinstance``
+        checks (HARD_QUESTIONS #6). Call sites use the ``batch_complete`` helper,
+        which probes for ``complete_batch`` and falls back to looping.
+        """
         ...
+
+
+def batch_complete(judge: Judge, prompts: list[str]) -> list[str]:
+    """Complete many prompts via a judge, using ``complete_batch`` if provided.
+
+    This is the single call-site seam for batched judging (one home). If the
+    adapter implements ``complete_batch`` it is used (potentially concurrent);
+    otherwise we loop ``complete`` so simple adapters still work. Later modules
+    (eval) call this rather than deciding batching per metric.
+    """
+    batch = getattr(judge, "complete_batch", None)
+    if callable(batch):
+        result = batch(prompts)
+        # A Protocol member that is present but unimplemented may return the
+        # Ellipsis sentinel; fall back to the loop in that degenerate case.
+        if isinstance(result, list):
+            return result
+    return [judge.complete(p) for p in prompts]
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -36,14 +64,23 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _env_float(name: str, default: float | None) -> float | None:
+def _env_float_strict(name: str, default: float | None) -> float | None:
+    """Parse a float env var, or raise ConfigError on a malformed value.
+
+    Fail-fast is deliberate for safety-critical settings like a cost ceiling: a
+    silent fallback could let an app run with the wrong spend limit and only
+    surface the mistake after money has been spent (HARD_QUESTIONS #9).
+    """
     raw = os.environ.get(name)
     if raw is None:
         return default
     try:
         return float(raw)
-    except ValueError:
-        return default
+    except ValueError as exc:
+        raise ConfigError(
+            f"{name} must be a number, got {raw!r}. "
+            f"Refusing to start with an ambiguous safety limit."
+        ) from exc
 
 
 @dataclass
@@ -68,7 +105,7 @@ class AgentArgusConfig:
         """Build a config from the environment, then apply explicit overrides."""
         base = cls(
             judge_model=os.environ.get("AGENTARGUS_JUDGE_MODEL", "claude-opus-4-8"),
-            cost_ceiling_usd=_env_float("AGENTARGUS_COST_CEILING_USD", None),
+            cost_ceiling_usd=_env_float_strict("AGENTARGUS_COST_CEILING_USD", None),
             tracer_exporter=os.environ.get("AGENTARGUS_TRACER_EXPORTER", "console"),
             log_level=os.environ.get("AGENTARGUS_LOG_LEVEL", "INFO"),
             log_color=_env_bool("AGENTARGUS_LOG_COLOR", True),

@@ -8,7 +8,12 @@ and the metrics.
 
 from __future__ import annotations
 
-from agentargus.config import AgentArgusConfig, Judge
+from agentargus._internal.exceptions import (
+    AgentArgusError,
+    ConfigError,
+    SerializationError,
+)
+from agentargus.config import AgentArgusConfig, Judge, batch_complete
 from agentargus.core import (
     CostBreakdown,
     ErrorRecord,
@@ -31,6 +36,10 @@ __all__ = [
     "CostBreakdown",
     "AgentArgusConfig",
     "Judge",
+    "batch_complete",
+    "AgentArgusError",
+    "ConfigError",
+    "SerializationError",
     "get_logger",
     "configure_logging",
 ]

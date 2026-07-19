@@ -5,7 +5,8 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-from agentargus.core import CostBreakdown, RunResult, Span
+from agentargus._internal.exceptions import SerializationError
+from agentargus.core import CostBreakdown, RunResult, Span, ToolCall
 
 
 class TestImmutability:
@@ -63,6 +64,29 @@ class TestSerialization:
         import json
 
         json.dumps(sample_run_result.to_dict())  # must not raise
+
+    def test_unserializable_output_raises_named_error(self) -> None:
+        # #7: fail loudly, naming the field, rather than silently mangling.
+        rr = RunResult(output=object(), trace_id="t")
+        with pytest.raises(SerializationError, match="output"):
+            rr.to_dict()
+
+    def test_output_with_to_dict_is_honoured(self) -> None:
+        class Custom:
+            def to_dict(self) -> dict[str, int]:
+                return {"n": 1}
+
+        rr = RunResult(output=Custom(), trace_id="t")
+        assert rr.to_dict()["output"] == {"n": 1}
+
+    def test_unserializable_tool_result_names_index(self) -> None:
+        rr = RunResult(
+            output="ok",
+            trace_id="t",
+            tool_calls=[ToolCall(name="f", args={}, result=object(), success=True, latency=0.1)],
+        )
+        with pytest.raises(SerializationError, match=r"tool_calls\[0\]\.result"):
+            rr.to_dict()
 
 
 class TestCostBreakdown:

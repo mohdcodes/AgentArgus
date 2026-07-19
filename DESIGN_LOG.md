@@ -64,13 +64,43 @@ the top.
 - **Not used in Module 0**, correctly. Module 0's inputs are not type-dispatched
   — there is no "same operation, different runtime types" site here. Forcing it
   would be decorative. Its designated sites are Modules 3, 5, 6 (and cautiously
-  1). **Important verified finding:** the spec's §4 says to import `OverloadMeta`
-  and use it as a metaclass for method overloading. **`OverloadMeta` does not
-  exist in `methodoverload` 0.1.7.** Empirically, `@overload` works on instance
-  methods with *no metaclass at all* (verified with a live test). Module 1+ will
-  use the real API; the spec's §4 is out of date on this point. Also confirmed
-  the §4.3 caution: callables have no distinct `isinstance` class, so the
-  `Agent.wrap` overload will dispatch on `BaseAgent` + a fallback.
+  1).
+- **Studied the library end-to-end before relying on it** (owner's explicit ask:
+  use it *gracefully*, not forcefully). Read the installed source and PyPI
+  metadata; wrote a verified reference at `docs/concepts/methodoverload.md`.
+  Findings that change how we'll use it:
+  - **Public API is exactly three names**: `overload`, `OverloadedFunction`,
+    `NoMatchingOverloadError`. The spec's §4 instruction to import `OverloadMeta`
+    is wrong for v0.1.7 — `OverloadMeta` exists only as an *internal, unexported*
+    class in `metaclass.py`. We will **not** reach into it; `@overload` alone
+    handles methods via frame inspection + the `__get__` descriptor, verified.
+  - **Dispatch is `isinstance`**, subclasses match their base, **no generics**,
+    **first-match-wins**, and there is a real **subtype ordering trap** (`bool`
+    is a subclass of `int`: register the most specific type first). All verified
+    empirically. Documented so every use site orders its overloads correctly.
+  - **Callables have no distinct `isinstance` class** — confirmed. So
+    `Agent.wrap` (site #3) overloads on `BaseAgent` only and routes plain
+    callables through a non-overloaded fallback, exactly per spec §4.3. We record
+    *why* instead of pretending it dispatched.
+
+### 4a. Post-review improvements (from HARD_QUESTIONS answers)
+The owner's answers to the Module 0 HARD_QUESTIONS proposed four behaviours
+better than the first cut. All were implemented before closing the gate:
+- **#5** — `configure_logging` now takes a `threading.Lock` and installs the new
+  handler via an atomic list swap (build-then-swap), so it can never be observed
+  half-configured even under concurrent misuse.
+- **#6** — batched judging is exposed via a `batch_complete(judge, prompts)`
+  helper that probes for an optional `complete_batch`; the `Judge` protocol keeps
+  `complete` as its *only* required member so minimal adapters still satisfy
+  `isinstance` (adding `complete_batch` to the protocol would have broken that —
+  caught by a failing test and reverted).
+- **#7** — `to_dict` now runs `output` and each tool `result` through a
+  `_jsonable` coercion that tries JSON, then `.to_dict()`, then raises a
+  `SerializationError` naming the exact field. No silent lossy fallback.
+- **#9** — a malformed `AGENTARGUS_COST_CEILING_USD` now raises `ConfigError`
+  (fail-fast) instead of silently defaulting — correct for a safety limit.
+Introduced `agentargus/_internal/exceptions.py` (`AgentArgusError`,
+`ConfigError`, `SerializationError`) as the one home for library error types.
 
 ### 5. Failure modes
 - If a caller stores a **mutable object inside** an otherwise-frozen field (e.g.

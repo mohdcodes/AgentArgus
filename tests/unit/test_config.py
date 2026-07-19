@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from agentargus.config import AgentArgusConfig, Judge
+from agentargus._internal.exceptions import ConfigError
+from agentargus.config import AgentArgusConfig, Judge, batch_complete
 
 
 class TestFromEnv:
@@ -37,10 +38,11 @@ class TestFromEnv:
         with pytest.raises(TypeError):
             AgentArgusConfig.from_env(nonexistent=True)
 
-    def test_bad_float_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_malformed_cost_ceiling_fails_fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # #9: a safety limit must not silently fall back to a default.
         monkeypatch.setenv("AGENTARGUS_COST_CEILING_USD", "not-a-number")
-        cfg = AgentArgusConfig.from_env()
-        assert cfg.cost_ceiling_usd is None
+        with pytest.raises(ConfigError):
+            AgentArgusConfig.from_env()
 
 
 class TestJudgeProtocol:
@@ -56,3 +58,29 @@ class TestJudgeProtocol:
             pass
 
         assert not isinstance(NotAJudge(), Judge)
+
+
+class TestBatchComplete:
+    def test_falls_back_to_loop_without_complete_batch(self) -> None:
+        # #6: simple adapters without complete_batch still work via the loop.
+        calls: list[str] = []
+
+        class SimpleJudge:
+            def complete(self, prompt: str) -> str:
+                calls.append(prompt)
+                return prompt.upper()
+
+        out = batch_complete(SimpleJudge(), ["a", "b"])
+        assert out == ["A", "B"]
+        assert calls == ["a", "b"]
+
+    def test_uses_complete_batch_when_available(self) -> None:
+        class BatchingJudge:
+            def complete(self, prompt: str) -> str:  # pragma: no cover - not used
+                raise AssertionError("should not be called")
+
+            def complete_batch(self, prompts: list[str]) -> list[str]:
+                return [p * 2 for p in prompts]
+
+        out = batch_complete(BatchingJudge(), ["x", "y"])
+        assert out == ["xx", "yy"]

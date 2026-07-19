@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from contextvars import ContextVar
 from typing import Any
 
@@ -108,6 +109,7 @@ class JsonFormatter(logging.Formatter):
 # --------------------------------------------------------------------------- #
 _ROOT_NAME = "agentargus"
 _configured = False
+_config_lock = threading.Lock()
 
 
 def _should_use_color(color_flag: bool, stream: Any) -> bool:
@@ -126,25 +128,32 @@ def configure_logging(
     json_format: bool = False,
     stream: Any | None = None,
 ) -> None:
-    """Configure the ``agentargus`` root logger. Idempotent per process."""
+    """Configure the ``agentargus`` root logger.
+
+    The contract is "call once at startup". A lock plus build-then-swap makes
+    even a concurrent misuse safe: the fully-built handler is installed
+    atomically, so logging can never be observed half-configured
+    (HARD_QUESTIONS #5).
+    """
     global _configured
     stream = stream if stream is not None else sys.stderr
-    logger = logging.getLogger(_ROOT_NAME)
-    logger.setLevel(level.upper())
-    logger.propagate = False
 
-    # Replace handlers so reconfiguring in tests is clean.
-    for handler in list(logger.handlers):
-        logger.removeHandler(handler)
-
+    # Build the new handler completely BEFORE touching the logger.
     handler = logging.StreamHandler(stream)
     handler.addFilter(_TraceIdFilter())
     if json_format:
         handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(ColorFormatter(_should_use_color(color, stream)))
-    logger.addHandler(handler)
-    _configured = True
+
+    with _config_lock:
+        logger = logging.getLogger(_ROOT_NAME)
+        logger.setLevel(level.upper())
+        logger.propagate = False
+        # Atomic swap: replace the handler list in one assignment rather than
+        # remove-then-add as two separately-visible steps.
+        logger.handlers = [handler]
+        _configured = True
 
 
 def get_logger(name: str | None = None) -> logging.Logger:
